@@ -1,0 +1,2198 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Film,
+  Layers,
+  Settings,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Trash2,
+  Tv,
+  ExternalLink,
+  SlidersHorizontal,
+  FolderLock,
+  Play,
+  RotateCcw,
+  Check,
+  AlertTriangle,
+  BookOpen,
+  Sliders,
+  HelpCircle,
+  Menu,
+  X,
+  Sparkles,
+  RefreshCw,
+  Cpu,
+  Info,
+  History,
+  Lock,
+  User,
+  Key,
+  LogOut,
+  Heart,
+  Share2,
+  Star
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { CMSSource, M3U8Parser, ScrapingRules, AppSettings, VideoItem, CategoryItem, CMSResponse, WatchHistoryItem } from './types';
+import VideoPlayer from './components/VideoPlayer';
+import VideoCard from './components/VideoCard';
+import SearchAndFilter from './components/SearchAndFilter';
+
+// Deterministic Emby-style review rating generator based on string hash
+const getRating = (name: string): string => {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const score = 7.2 + (Math.abs(hash) % 24) / 10; // score bound between 7.2 and 9.5
+  return score.toFixed(1);
+};
+
+// Deterministic Emby-style visitor heat indicator based on string hash
+const getPopularity = (name: string): number => {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 3) - hash);
+  }
+  return 1205 + (Math.abs(hash) % 8765); // popularity between 1205 and 9970
+};
+
+export default function App() {
+  // Settings State loaded from server
+  const [settings, setSettings] = useState<AppSettings>({
+    cmsSources: [],
+    m3u8Parsers: [],
+    rules: {
+      titleKey: 'vod_name',
+      picKey: 'vod_pic',
+      categoryKey: 'type_name',
+      playUrlKey: 'vod_play_url',
+      remarksKey: 'vod_remarks',
+      contentKey: 'vod_content',
+      playFromServerKey: 'vod_play_from',
+      splitPlayServer: '$$$',
+      splitPlayEpisode: '#',
+      splitPlayNameAndUrl: '$'
+    },
+    selectedCmsId: '',
+    selectedParserId: 'internal'
+  });
+
+  // UI state
+  const [loadingSettings, setLoadingSettings] = useState(true);
+  const [loadingVideos, setLoadingVideos] = useState(false);
+  const [videos, setVideos] = useState<VideoItem[]>([]);
+  const [categories, setCategories] = useState<CategoryItem[]>([]);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | number>('');
+  const [searchKeyword, setSearchKeyword] = useState<string>('');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [activeTab, setActiveTab] = useState<'home' | 'admin'>('home');
+  const [adminTab, setAdminTab] = useState<'config' | 'guide'>('config');
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => {
+    return sessionStorage.getItem('isAdminLoggedIn') === 'true';
+  });
+  const [loginUsername, setLoginUsername] = useState<string>('');
+  const [loginPassword, setLoginPassword] = useState<string>('');
+  const [loginError, setLoginError] = useState<string>('');
+
+  // Currently playing movie
+  const [currentVideo, setCurrentVideo] = useState<VideoItem | null>(null);
+  const [currentPlayUrl, setCurrentPlayUrl] = useState<string>('');
+  const [currentEpisodeIndex, setCurrentEpisodeIndex] = useState<number>(0);
+  const [currentServerIndex, setCurrentServerIndex] = useState<number>(0);
+  const [parsedServers, setParsedServers] = useState<{ name: string; episodes: { name: string; url: string }[] }[]>([]);
+
+  // Mobile drawer control
+  const [showConfigMobile, setShowConfigMobile] = useState(false);
+
+  // Settings modification fields state
+  const [tempCmsName, setTempCmsName] = useState('');
+  const [tempCmsUrl, setTempCmsUrl] = useState('');
+  const [tempParserName, setTempParserName] = useState('');
+  const [tempParserUrl, setTempParserUrl] = useState('');
+  const [rules, setRules] = useState<ScrapingRules>({
+    titleKey: 'vod_name',
+    picKey: 'vod_pic',
+    categoryKey: 'type_name',
+    playUrlKey: 'vod_play_url',
+    remarksKey: 'vod_remarks',
+    contentKey: 'vod_content',
+    playFromServerKey: 'vod_play_from',
+    splitPlayServer: '$$$',
+    splitPlayEpisode: '#',
+    splitPlayNameAndUrl: '$'
+  });
+
+  // Notification Toast state
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+
+  // Watch History state
+  const [watchHistory, setWatchHistory] = useState<WatchHistoryItem[]>([]);
+
+  // Is player active in Emby cinematic workspace
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+
+  // Favorites list state
+  const [favorites, setFavorites] = useState<VideoItem[]>([]);
+
+  // Load Watch History and Favorites from LocalStorage on mount
+  useEffect(() => {
+    const historical = localStorage.getItem('watchHistory');
+    if (historical) {
+      try {
+        setWatchHistory(JSON.parse(historical));
+      } catch (e) {
+        console.warn('Failed to parse watch history', e);
+      }
+    }
+
+    const favs = localStorage.getItem('favorites');
+    if (favs) {
+      try {
+        setFavorites(JSON.parse(favs));
+      } catch (e) {
+        console.warn('Failed to parse favorites', e);
+      }
+    }
+  }, []);
+
+  const saveWatchHistory = (
+    video: VideoItem,
+    serverIdx: number,
+    epIdx: number,
+    serverName: string,
+    epName: string,
+    epUrl: string
+  ) => {
+    const nextItem: WatchHistoryItem = {
+      id: video.id,
+      name: video.name,
+      pic: video.pic,
+      category: video.category,
+      remarks: video.remarks,
+      cmsId: settings.selectedCmsId || '',
+      playFrom: video.playFrom,
+      playUrl: video.playUrl,
+      lastPlayedServerName: serverName,
+      lastPlayedEpisodeName: epName,
+      lastPlayedEpisodeUrl: epUrl,
+      lastPlayedServerIndex: serverIdx,
+      lastPlayedEpisodeIndex: epIdx,
+      updatedAt: Date.now(),
+      content: video.content,
+      year: video.year,
+      area: video.area,
+      lang: video.lang,
+      director: video.director,
+      actor: video.actor
+    };
+    
+    setWatchHistory(prev => {
+      const filtered = prev.filter(item => item.id !== video.id);
+      const updated = [nextItem, ...filtered].slice(0, 30);
+      localStorage.setItem('watchHistory', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const handleDeleteHistory = (id: string | number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setWatchHistory(prev => {
+      const updated = prev.filter(item => item.id !== id);
+      localStorage.setItem('watchHistory', JSON.stringify(updated));
+      return updated;
+    });
+    showToast('已从历史记录中移除');
+  };
+
+  const handleClearAllHistory = () => {
+    setWatchHistory([]);
+    localStorage.removeItem('watchHistory');
+    showToast('历史播放记录已完全清空');
+  };
+
+  const toggleFavorite = (video: VideoItem) => {
+    setFavorites(prev => {
+      const isFav = prev.some(item => String(item.id) === String(video.id));
+      let nextFavs;
+      if (isFav) {
+        nextFavs = prev.filter(item => String(item.id) !== String(video.id));
+        showToast(`已从臻选收藏中移除: ${video.name}`, 'info');
+      } else {
+        nextFavs = [video, ...prev];
+        showToast(`已成功收藏影片: 《${video.name}》`, 'success');
+      }
+      localStorage.setItem('favorites', JSON.stringify(nextFavs));
+      return nextFavs;
+    });
+  };
+
+  const handleResumeHistory = (item: WatchHistoryItem) => {
+    if (item.cmsId && item.cmsId !== settings.selectedCmsId) {
+      const parentCms = settings.cmsSources.find(c => c.id === item.cmsId);
+      if (parentCms) {
+        setSettings(prev => ({ ...prev, selectedCmsId: item.cmsId }));
+        showToast(`已切换至该视频所属数据站: ${parentCms.name}`, 'info');
+      }
+    }
+    
+    const movie: VideoItem = {
+      id: item.id,
+      name: item.name,
+      pic: item.pic,
+      category: item.category,
+      remarks: item.remarks,
+      content: item.content || '',
+      playFrom: item.playFrom,
+      playUrl: item.playUrl,
+      year: item.year,
+      area: item.area,
+      lang: item.lang,
+      director: item.director,
+      actor: item.actor
+    };
+    
+    setCurrentVideo(movie);
+    setIsPlaying(true);
+    
+    const splitServ = settings.rules.splitPlayServer || '$$$';
+    const splitEp = settings.rules.splitPlayEpisode || '#';
+    const splitNameUrl = settings.rules.splitPlayNameAndUrl || '$';
+
+    const serverParts = movie.playUrl.split(splitServ);
+    const serverNames = movie.playFrom.split(splitServ);
+
+    const parsed = serverParts.map((part, index) => {
+      const serverDesc = serverNames[index] || `播放线路 ${index + 1}`;
+      
+      const episodesList = part.split(splitEp).filter(ep => ep.trim() !== '').map(epStr => {
+        const details = epStr.split(splitNameUrl);
+        let epName = '播放播放';
+        let epUrl = '';
+
+        if (details.length >= 2) {
+          epName = details[0].trim();
+          epUrl = details.slice(1).join(splitNameUrl).trim();
+        } else {
+          epUrl = epStr.trim();
+          epName = `正片`;
+        }
+        return { name: epName, url: epUrl };
+      });
+
+      return {
+        name: serverDesc,
+        episodes: episodesList
+      };
+    });
+
+    setParsedServers(parsed);
+
+    let targetServerIdx = item.lastPlayedServerIndex;
+    let targetEpisodeIdx = item.lastPlayedEpisodeIndex;
+
+    if (targetServerIdx >= parsed.length) {
+      targetServerIdx = 0;
+    }
+    if (parsed[targetServerIdx] && targetEpisodeIdx >= parsed[targetServerIdx].episodes.length) {
+      targetEpisodeIdx = 0;
+    }
+
+    if (parsed.length > 0 && parsed[targetServerIdx].episodes.length > 0) {
+      setCurrentServerIndex(targetServerIdx);
+      setCurrentEpisodeIndex(targetEpisodeIdx);
+      setCurrentPlayUrl(parsed[targetServerIdx].episodes[targetEpisodeIdx].url);
+      
+      saveWatchHistory(
+        movie,
+        targetServerIdx,
+        targetEpisodeIdx,
+        parsed[targetServerIdx].name,
+        parsed[targetServerIdx].episodes[targetEpisodeIdx].name,
+        parsed[targetServerIdx].episodes[targetEpisodeIdx].url
+      );
+
+      showToast(`已为您自动恢复上次播放: ${parsed[targetServerIdx].name} - ${parsed[targetServerIdx].episodes[targetEpisodeIdx].name}`);
+    } else {
+      setCurrentPlayUrl('');
+      showToast('无法定位该视频的播放地址', 'error');
+    }
+
+    const target = document.getElementById('active-player-room') || document.getElementById('main-content-flow');
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setToastMessage({ type, text });
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 4500);
+  };
+
+  // 1. Fetch settings from server
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        // Load local copy first for instant response and persistence across server resets
+        const localSettingsStr = localStorage.getItem('appSettings');
+        let localSettings: AppSettings | null = null;
+        if (localSettingsStr) {
+          try {
+            localSettings = JSON.parse(localSettingsStr);
+          } catch (e) {
+            console.warn('Failed to parse local settings', e);
+          }
+        }
+
+        const res = await fetch('/api/settings');
+        if (res.ok) {
+          const serverData = (await res.json()) as AppSettings;
+          
+          if (localSettings) {
+            // Merge server configurations with local configuration to preserve custom resources user added
+            const mergedCmsSources = [...serverData.cmsSources];
+            if (Array.isArray(localSettings.cmsSources)) {
+              localSettings.cmsSources.forEach(localSrc => {
+                const isDuplicate = mergedCmsSources.some(s => s.id === localSrc.id || s.url === localSrc.url);
+                if (!isDuplicate) {
+                  mergedCmsSources.push(localSrc);
+                }
+              });
+            }
+
+            const mergedParsers = [...serverData.m3u8Parsers];
+            if (Array.isArray(localSettings.m3u8Parsers)) {
+              localSettings.m3u8Parsers.forEach(localParser => {
+                const isDuplicate = mergedParsers.some(p => p.id === localParser.id || p.url === localParser.url);
+                if (!isDuplicate) {
+                  mergedParsers.push(localParser);
+                }
+              });
+            }
+
+            // Restore selection if it exists in the merged lists
+            const selectedCmsId = mergedCmsSources.some(s => s.id === localSettings!.selectedCmsId)
+              ? localSettings.selectedCmsId
+              : serverData.selectedCmsId;
+
+            const selectedParserId = mergedParsers.some(p => p.id === localSettings!.selectedParserId)
+              ? localSettings.selectedParserId
+              : serverData.selectedParserId;
+
+            const mergedSettings: AppSettings = {
+              ...serverData,
+              ...localSettings,
+              cmsSources: mergedCmsSources,
+              m3u8Parsers: mergedParsers,
+              selectedCmsId,
+              selectedParserId
+            };
+
+            setSettings(mergedSettings);
+            setRules(mergedSettings.rules);
+
+            // Sync back to local storage and server
+            localStorage.setItem('appSettings', JSON.stringify(mergedSettings));
+            fetch('/api/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(mergedSettings)
+            }).catch(err => console.warn('Failed silent server sync', err));
+          } else {
+            setSettings(serverData);
+            setRules(serverData.rules);
+            localStorage.setItem('appSettings', JSON.stringify(serverData));
+          }
+          showToast('已加载影视采集与解析配置', 'info');
+        } else {
+          if (localSettings) {
+            setSettings(localSettings);
+            setRules(localSettings.rules);
+            showToast('无法读取云端配置，已应用本地缓存设定', 'info');
+          } else {
+            showToast('无法从服务器加载配置，已应用系统默认设定', 'error');
+          }
+        }
+      } catch (err: any) {
+        showToast(`加载配置失败: ${err.message}`, 'error');
+      } finally {
+        setLoadingSettings(false);
+      }
+    }
+    loadSettings();
+  }, []);
+
+  // Sync / Load videos when Active CMS config is loaded or changes, as well as selected category, page, search
+  useEffect(() => {
+    if (loadingSettings || !settings.selectedCmsId) return;
+
+    const activeCms = settings.cmsSources.find(s => s.id === settings.selectedCmsId);
+    if (!activeCms) {
+      // Fallback if not found
+      if (settings.cmsSources.length > 0) {
+        const firstCmsId = settings.cmsSources[0].id;
+        setSettings(prev => ({ ...prev, selectedCmsId: firstCmsId }));
+      }
+      return;
+    }
+
+    fetchVideosFromCms(activeCms.url, currentPage, selectedCategoryId, searchKeyword);
+  }, [settings.selectedCmsId, currentPage, selectedCategoryId, searchKeyword, loadingSettings]);
+
+  // Handle auto pulling category filter list on CMS target source change
+  useEffect(() => {
+    if (loadingSettings || !settings.selectedCmsId) return;
+    const activeCms = settings.cmsSources.find(s => s.id === settings.selectedCmsId);
+    if (!activeCms) return;
+
+    async function fetchClasses() {
+      try {
+        const proxyUrl = `/api/cms-proxy?url=${encodeURIComponent(activeCms!.url)}`;
+        const res = await fetch(proxyUrl);
+        if (res.ok) {
+          const text = await res.text();
+          try {
+            const data = JSON.parse(text);
+            // Pull class categories if returned by CMS json API
+            if (data.class && Array.isArray(data.class)) {
+              const formattedCats: CategoryItem[] = data.class.map((c: any) => ({
+                id: c.type_id ?? c.id,
+                name: c.type_name ?? c.name
+              }));
+              setCategories(formattedCats);
+              return;
+            }
+          } catch (e) {
+            console.warn('Failed to parse classifications JSON:', e);
+          }
+        }
+        // Fallback list of major general groups if class list is missing or invalid
+        setCategories([
+          { id: '1', name: '电影' },
+          { id: '2', name: '电视剧' },
+          { id: '3', name: '综艺' },
+          { id: '4', name: '动漫' }
+        ]);
+      } catch (err) {
+        console.warn('Could not extract classifications directly from CMS, falling back:', err);
+        setCategories([
+          { id: '1', name: '电影' },
+          { id: '2', name: '电视剧' },
+          { id: '3', name: '综艺' },
+          { id: '4', name: '动漫' }
+        ]);
+      }
+    }
+    
+    // Clear old filters
+    setSelectedCategoryId('');
+    setCategories([]);
+    setCurrentPage(1);
+    fetchClasses();
+  }, [settings.selectedCmsId, loadingSettings]);
+
+  // Core CMS consumer with custom parsing rule mappings applied on proxy feedback
+  const fetchVideosFromCms = async (
+    cmsUrl: string,
+    page: number,
+    categoryId: string | number,
+    keyword: string,
+    forceRefresh: boolean = false
+  ) => {
+    setLoadingVideos(true);
+    try {
+      let queryUrl = `/api/cms-proxy?url=${encodeURIComponent(cmsUrl)}&pg=${page}`;
+      
+      if (keyword) {
+        // With keywords, CMS sometimes ignores type filter
+        queryUrl += `&wd=${encodeURIComponent(keyword)}&ac=list`;
+      } else if (categoryId) {
+        queryUrl += `&t=${categoryId}&ac=videolist`;
+      } else {
+        queryUrl += `&ac=videolist`;
+      }
+
+      if (forceRefresh) {
+        queryUrl += `&refresh=true`;
+      }
+
+      const res = await fetch(queryUrl);
+      const text = await res.text().catch(() => '');
+
+      if (!res.ok) {
+        let errorMsg = '获取数据失败，资源站接口可能暂不可用';
+        try {
+          const errorJson = JSON.parse(text);
+          errorMsg = errorJson.error || errorMsg;
+        } catch {
+          if (text.includes('<!DOCTYPE') || text.includes('<html')) {
+            errorMsg = '代理网关返回了网页错误 (例如 502/504 线路超时，或服务器不可达)，请切换其他采集源重试';
+          }
+        }
+        throw new Error(errorMsg);
+      }
+
+      if (text.includes('<!DOCTYPE') || text.includes('<html')) {
+        throw new Error('代理网关返回了网页数据 (可能采集主站接口超时或暂时失效)，请检查配置的采集源地址或切换其他采集源');
+      }
+
+      let rawData;
+      try {
+        rawData = JSON.parse(text);
+      } catch (e) {
+        throw new Error('解析返回的 JSON 数据失败，可能是接口已被屏蔽或返回了无效格式');
+      }
+
+      // Ensure we extract pagination correctly
+      const total = rawData.total ? parseInt(rawData.total) : (rawData.pagecount ? parseInt(rawData.pagecount) * 20 : 100);
+      const pagecount = rawData.pagecount ? parseInt(rawData.pagecount) : 1;
+      const currentPageFromApi = rawData.page ? parseInt(rawData.page) : page;
+      setTotalPages(pagecount || 1);
+      setTotalCount(total);
+
+      // Now apply the USER'S scrape mapping rules!
+      const rawList = rawData.list || [];
+      const userRules = settings.rules;
+
+      const normalizedList: VideoItem[] = rawList.map((item: any) => {
+        return {
+          id: item.vod_id || item.id || Math.random().toString(),
+          name: item[userRules.titleKey] || item.vod_name || '未命名视频',
+          pic: item[userRules.picKey] || item.vod_pic || '',
+          category: item[userRules.categoryKey] || item.type_name || '其它',
+          remarks: item[userRules.remarksKey] || item.vod_remarks || '完结',
+          content: item[userRules.contentKey] || item.vod_content || '暂无剧情简介...',
+          playFrom: item[userRules.playFromServerKey] || item.vod_play_from || 'm3u8',
+          playUrl: item[userRules.playUrlKey] || item.vod_play_url || '',
+          year: item.vod_year || item.year || '',
+          area: item.vod_area || item.area || '',
+          lang: item.vod_lang || item.lang || '',
+          director: item.vod_director || item.director || '',
+          actor: item.vod_actor || item.actor || ''
+        };
+      });
+
+      setVideos(normalizedList);
+    } catch (err: any) {
+      showToast(`接口请求出错: ${err.message}`, 'error');
+      setVideos([]);
+      setTotalPages(1);
+    } finally {
+      setLoadingVideos(false);
+    }
+  };
+
+  // Save full settings to server database
+  const saveAllSettingsToServer = async (newSettings: AppSettings) => {
+    // Write immediately to localStorage for robust offline/cycle resilience
+    localStorage.setItem('appSettings', JSON.stringify(newSettings));
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSettings)
+      });
+      if (res.ok) {
+        setSettings(newSettings);
+        showToast('设置保存成功且生效！', 'success');
+      } else {
+        showToast('无法同步设置到云端', 'error');
+      }
+    } catch (err: any) {
+      showToast(`保存失败: ${err.message}`, 'error');
+    }
+  };
+
+  // CMS configuration modifications
+  const handleAddNewCms = () => {
+    if (!tempCmsName || !tempCmsUrl) {
+      showToast('请输入完整的资源站名称及JSON端点', 'error');
+      return;
+    }
+    if (!tempCmsUrl.startsWith('http://') && !tempCmsUrl.startsWith('https://')) {
+      showToast('API地址需以 http:// 或 https:// 开头', 'error');
+      return;
+    }
+
+    const newId = 'cms_' + Date.now();
+    const newSource: CMSSource = {
+      id: newId,
+      name: tempCmsName,
+      url: tempCmsUrl,
+      status: 'active'
+    };
+
+    const nextSettings = {
+      ...settings,
+      cmsSources: [...settings.cmsSources, newSource],
+      selectedCmsId: settings.selectedCmsId || newId // Auto-choose if first
+    };
+
+    saveAllSettingsToServer(nextSettings);
+    setTempCmsName('');
+    setTempCmsUrl('');
+    showToast(`成功新增采集源: ${tempCmsName}`);
+  };
+
+  const handleDeleteCms = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (settings.cmsSources.length <= 1) {
+      showToast('请至少保留一个默认CMS采集源！', 'info');
+      return;
+    }
+    const filtered = settings.cmsSources.filter(s => s.id !== id);
+    const selectFallbackId = settings.selectedCmsId === id ? filtered[0].id : settings.selectedCmsId;
+    
+    const nextSettings = {
+      ...settings,
+      cmsSources: filtered,
+      selectedCmsId: selectFallbackId
+    };
+    saveAllSettingsToServer(nextSettings);
+    showToast('采集源已移除');
+  };
+
+  // Parser modifications
+  const handleAddNewParser = () => {
+    if (!tempParserName || !tempParserUrl) {
+      showToast('请输入解析器名称及带 = 号的接口地址', 'error');
+      return;
+    }
+    const newId = 'parser_' + Date.now();
+    const newParser: M3U8Parser = {
+      id: newId,
+      name: tempParserName,
+      url: tempParserUrl,
+      type: 'iframe',
+      status: 'active'
+    };
+
+    const nextSettings = {
+      ...settings,
+      m3u8Parsers: [...settings.m3u8Parsers, newParser]
+    };
+    saveAllSettingsToServer(nextSettings);
+    setTempParserName('');
+    setTempParserUrl('');
+    showToast(`已添加网页嵌套解析接口: ${tempParserName}`);
+  };
+
+  const handleDeleteParser = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const filtered = settings.m3u8Parsers.filter(p => p.id !== id);
+    const fallbackParserId = settings.selectedParserId === id ? 'internal' : settings.selectedParserId;
+
+    const nextSettings = {
+      ...settings,
+      m3u8Parsers: filtered,
+      selectedParserId: fallbackParserId
+    };
+    saveAllSettingsToServer(nextSettings);
+    showToast('解析器已移除');
+  };
+
+  // Rules save
+  const handleSaveScrapingRules = () => {
+    const nextSettings = {
+      ...settings,
+      rules: { ...rules }
+    };
+    saveAllSettingsToServer(nextSettings);
+  };
+
+  // Parse play urls of chosen movie according to splitting rules
+  const parsePlayData = (video: VideoItem) => {
+    const splitServ = settings.rules.splitPlayServer || '$$$';
+    const splitEp = settings.rules.splitPlayEpisode || '#';
+    const splitNameUrl = settings.rules.splitPlayNameAndUrl || '$';
+
+    // Parse different servers / languages
+    const serverParts = video.playUrl.split(splitServ);
+    const serverNames = video.playFrom.split(splitServ);
+
+    const parsed = serverParts.map((part, index) => {
+      const serverDesc = serverNames[index] || `播放线路 ${index + 1}`;
+      
+      // Parse individual episodes
+      const episodesList = part.split(splitEp).filter(ep => ep.trim() !== '').map(epStr => {
+        const details = epStr.split(splitNameUrl);
+        let epName = '播放播放';
+        let epUrl = '';
+
+        if (details.length >= 2) {
+          epName = details[0].trim();
+          // Sometimes m3u8 uses nested lists
+          epUrl = details.slice(1).join(splitNameUrl).trim();
+        } else {
+          epUrl = epStr.trim();
+          // Fallback guess name
+          epName = `正片`;
+        }
+        return { name: epName, url: epUrl };
+      });
+
+      return {
+        name: serverDesc,
+        episodes: episodesList
+      };
+    });
+
+    setParsedServers(parsed);
+    
+    // Check if we have history for this video to resume
+    const existingHistory = watchHistory.find(
+      item => String(item.id) === String(video.id)
+    );
+    
+    let targetServerIdx = 0;
+    let targetEpisodeIdx = 0;
+    
+    if (existingHistory) {
+      if (
+        existingHistory.lastPlayedServerIndex < parsed.length &&
+        existingHistory.lastPlayedEpisodeIndex < parsed[existingHistory.lastPlayedServerIndex].episodes.length
+      ) {
+        targetServerIdx = existingHistory.lastPlayedServerIndex;
+        targetEpisodeIdx = existingHistory.lastPlayedEpisodeIndex;
+        showToast(`已自动为您恢复续看：${existingHistory.lastPlayedServerName} - ${existingHistory.lastPlayedEpisodeName}`, 'success');
+      }
+    }
+
+    // Choose target server and episode to play
+    if (parsed.length > 0 && parsed[targetServerIdx].episodes.length > 0) {
+      setCurrentServerIndex(targetServerIdx);
+      setCurrentEpisodeIndex(targetEpisodeIdx);
+      setCurrentPlayUrl(parsed[targetServerIdx].episodes[targetEpisodeIdx].url);
+      
+      saveWatchHistory(
+        video,
+        targetServerIdx,
+        targetEpisodeIdx,
+        parsed[targetServerIdx].name,
+        parsed[targetServerIdx].episodes[targetEpisodeIdx].name,
+        parsed[targetServerIdx].episodes[targetEpisodeIdx].url
+      );
+    } else {
+      setCurrentPlayUrl('');
+      showToast('未能从所选播放字段解析到合规链接。请检查您在自定义规则中设置的符号。', 'info');
+    }
+  };
+
+  const handleSelectVideo = (video: VideoItem) => {
+    setCurrentVideo(video);
+    setIsPlaying(false);
+    parsePlayData(video);
+    // Scroll smoothly to player
+    const target = document.getElementById('active-player-room') || document.getElementById('main-content-flow');
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const handleSelectEpisode = (serverIndex: number, episodeIndex: number, url: string) => {
+    setCurrentServerIndex(serverIndex);
+    setCurrentEpisodeIndex(episodeIndex);
+    setCurrentPlayUrl(url);
+
+    if (currentVideo && parsedServers[serverIndex]) {
+      const server = parsedServers[serverIndex];
+      const ep = server.episodes[episodeIndex];
+      saveWatchHistory(
+        currentVideo,
+        serverIndex,
+        episodeIndex,
+        server.name,
+        ep ? ep.name : `第${episodeIndex + 1}集`,
+        url
+      );
+    }
+  };
+
+  const handleEpisodeNavigation = (direction: 'prev' | 'next') => {
+    const currentServer = parsedServers[currentServerIndex];
+    if (!currentServer) return;
+
+    let targetIndex = currentEpisodeIndex;
+    if (direction === 'prev') {
+      targetIndex = currentEpisodeIndex - 1;
+    } else {
+      targetIndex = currentEpisodeIndex + 1;
+    }
+
+    if (targetIndex >= 0 && targetIndex < currentServer.episodes.length) {
+      const targetEp = currentServer.episodes[targetIndex];
+      setCurrentEpisodeIndex(targetIndex);
+      setCurrentPlayUrl(targetEp.url);
+      showToast(`已切换至: ${targetEp.name}`);
+
+      if (currentVideo) {
+        saveWatchHistory(
+          currentVideo,
+          currentServerIndex,
+          targetIndex,
+          currentServer.name,
+          targetEp.name,
+          targetEp.url
+        );
+      }
+    }
+  };
+
+  const currentParserObject = settings.selectedParserId === 'internal'
+    ? null
+    : settings.m3u8Parsers.find(p => p.id === settings.selectedParserId) || null;
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans flex flex-col antialiased">
+      
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            id="toast-notification-banner"
+            className={`fixed top-5 left-1/2 -translate-x-1/2 z-50 flex items-center space-x-2.5 px-4.5 py-3 rounded-xl shadow-xl border text-sm max-w-sm w-full backdrop-blur-md ${
+              toastMessage.type === 'error'
+                ? 'bg-rose-950 border-rose-900 text-white'
+                : toastMessage.type === 'info'
+                ? 'bg-zinc-900 border-zinc-800 text-white'
+                : 'bg-emerald-950 border-emerald-900 text-white'
+            }`}
+          >
+            {toastMessage.type === 'error' ? (
+              <AlertTriangle className="h-5 w-5 text-rose-500 shrink-0" />
+            ) : toastMessage.type === 'info' ? (
+              <Cpu className="h-5 w-5 text-red-500 shrink-0 animate-pulse" />
+            ) : (
+              <Check className="h-5 w-5 text-emerald-500 shrink-0" />
+            )}
+            <p className="font-semibold truncate flex-1">{toastMessage.text}</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* TOP DESKTOP & MOBILE HEADER */}
+      <header className="h-16 flex items-center justify-between px-4 sm:px-10 bg-[#141414] border-b border-zinc-900 sticky top-0 z-40 shadow-xl">
+        <div className="flex items-center space-x-6 sm:space-x-8">
+          <div className="flex items-center space-x-2 cursor-pointer" onClick={() => { setActiveTab('home'); setSelectedCategoryId(''); setSearchKeyword(''); }}>
+            <span className="p-2 bg-red-600 text-white rounded-lg flex items-center justify-center">
+              <Film className="h-5 w-5" />
+            </span>
+            <h1 className="text-lg font-extrabold tracking-wider text-red-600 flex items-center">
+              极简影院 <span className="text-zinc-500 font-normal ml-1.5 text-xs select-none uppercase tracking-widest font-mono">NETFLIX CINE</span>
+            </h1>
+          </div>
+
+          {/* Desktop Navigation Tabs */}
+          <nav className="hidden md:flex space-x-6 text-sm font-semibold text-zinc-400 text-[13px]">
+            <button
+              onClick={() => { setActiveTab('home'); }}
+              className={`hover:text-white transition-colors cursor-pointer ${activeTab === 'home' ? 'text-red-500 font-extrabold' : ''}`}
+            >
+              首页广场
+            </button>
+            <button
+              onClick={() => { setActiveTab('admin'); }}
+              className={`hover:text-white transition-colors flex items-center space-x-1 cursor-pointer ${activeTab === 'admin' ? 'text-red-500 font-extrabold' : ''}`}
+            >
+              <Lock className="h-3.5 w-3.5" />
+              <span>管理后台</span>
+            </button>
+          </nav>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          {isAdminLoggedIn && (
+            <button
+              onClick={() => {
+                setIsAdminLoggedIn(false);
+                sessionStorage.removeItem('isAdminLoggedIn');
+                setActiveTab('home');
+                showToast('已安全退出管理后台', 'info');
+              }}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1 border border-zinc-800 bg-zinc-900 hover:bg-rose-950 hover:text-white text-zinc-350 transition active:scale-95 cursor-pointer"
+              title="退出登录"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span>退出后台</span>
+            </button>
+          )}
+          {!isAdminLoggedIn && (
+            <button
+              onClick={() => { setActiveTab('admin'); }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1 border transition-all active:scale-95 cursor-pointer ${
+                activeTab === 'admin'
+                  ? 'bg-red-650 text-white border-red-650 shadow-md'
+                  : 'bg-zinc-900 hover:bg-zinc-850 hover:text-white text-zinc-300 border-zinc-800'
+              }`}
+              title="登录管理后台"
+            >
+              <Lock className="h-3.5 w-3.5" />
+              <span>登录后台</span>
+            </button>
+          )}
+        </div>
+      </header>
+
+      {/* MOBILE HEADER BUTTONS */}
+      <div className="md:hidden flex bg-[#141414] px-4 py-2 justify-around border-b border-zinc-900 text-xs font-semibold text-zinc-400">
+        <button
+          onClick={() => { setActiveTab('home'); }}
+          className={`px-4 py-1.5 cursor-pointer ${activeTab === 'home' ? 'bg-red-600/10 text-red-500 rounded-lg font-bold' : ''}`}
+        >
+          资源广场
+        </button>
+        <button
+          onClick={() => { setActiveTab('admin'); }}
+          className={`px-4 py-1.5 flex items-center space-x-1 cursor-pointer ${activeTab === 'admin' ? 'bg-red-600/10 text-red-500 rounded-lg font-bold' : ''}`}
+        >
+          <Lock className="h-3 w-3" />
+          <span>管理后台</span>
+        </button>
+      </div>
+
+      {/* MAIN VIEW AREA */}
+      <main className="flex-1 flex flex-col overflow-hidden">
+        
+        {/* INNER SCROLL CONTENT - Renders tabs according to navigation */}
+        <section className="flex-1 p-4 sm:p-7 overflow-y-auto bg-zinc-950" id="main-content-flow">
+          
+          {/* TAB 1: VIDEOS AND MAIN THEME HOME */}
+          {activeTab === 'home' && (
+            <div className="space-y-6">
+              
+              {/* EMBY-STYLE VIDEO CINEMA DETAIL WORKSPACE */}
+              {currentVideo && (
+                <div className="bg-zinc-950 text-zinc-100 rounded-2xl overflow-hidden shadow-xl border border-zinc-900 space-y-1 relative" id="active-player-room">
+                  {/* Cinematic background blur backdrop */}
+                  <div className="absolute inset-0 pointer-events-none select-none z-0 overflow-hidden rounded-2xl" id="dynamic-cinematic-backdrop">
+                    <img
+                      src={currentVideo.pic}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full object-cover blur-3xl opacity-80 saturate-150 scale-105"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.src = 'https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=800';
+                      }}
+                    />
+                    <div className="absolute inset-0 bg-zinc-950/55" />
+                  </div>
+
+                  {/* Part 1: THEATER VIEWPORT (Render player only if isPlaying is true!) */}
+                  {isPlaying ? (
+                    <div className="bg-black relative select-none z-10">
+                      {/* Sub-header inside theater */}
+                      <div className="flex items-center justify-between px-4 py-3 bg-zinc-900/95 border-b border-zinc-850 backdrop-blur-xs">
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => {
+                              setIsPlaying(false);
+                            }}
+                            className="inline-flex items-center space-x-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-350 hover:text-white rounded-lg text-xs font-bold transition active:scale-95 border border-zinc-750 shadow-sm"
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                            <span>返回介绍</span>
+                          </button>
+                        </div>
+                        <div className="text-[11px] sm:text-xs text-zinc-400 truncate max-w-[150px] sm:max-w-md">
+                          正在放映: <span className="text-white font-bold">{currentVideo.name}</span> ({parsedServers[currentServerIndex]?.episodes[currentEpisodeIndex]?.name || '正片'})
+                        </div>
+                        <button
+                          onClick={() => {
+                            setCurrentVideo(null);
+                            setCurrentPlayUrl('');
+                            setIsPlaying(false);
+                          }}
+                          className="text-[11px] font-bold text-rose-400 hover:text-rose-350 hover:underline flex items-center space-x-0.5 px-2.5 py-1 bg-zinc-900 rounded-lg border border-zinc-800"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          <span className="hidden sm:inline">退出播放</span>
+                        </button>
+                      </div>
+
+                      <VideoPlayer
+                        playUrl={currentPlayUrl}
+                        title={currentVideo.name}
+                        episodeName={parsedServers[currentServerIndex]?.episodes[currentEpisodeIndex]?.name || '正片'}
+                        parser={currentParserObject}
+                        onNavigateEpisode={handleEpisodeNavigation}
+                        hasPrev={currentEpisodeIndex > 0}
+                        hasNext={
+                          parsedServers[currentServerIndex]
+                            ? currentEpisodeIndex < parsedServers[currentServerIndex].episodes.length - 1
+                            : false
+                        }
+                      />
+                    </div>
+                  ) : (
+                    /* Cinematic landscape poster header */
+                    <div className="relative w-full h-[100px] sm:h-[150px] md:h-[180px] overflow-hidden bg-zinc-900/60 shrink-0 select-none z-10">
+                      <img
+                        src={currentVideo.pic}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        className="absolute inset-0 w-full h-full object-cover blur-xl opacity-25 saturate-125 scale-105"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          target.src = 'https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=600';
+                        }}
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/50 to-transparent" />
+                      
+                      {/* Top left page back controls */}
+                      <div className="absolute top-4 left-4 z-20">
+                        <button
+                          onClick={() => {
+                            setCurrentVideo(null);
+                            setCurrentPlayUrl('');
+                            setIsPlaying(false);
+                          }}
+                          className="inline-flex items-center space-x-1.5 px-3 py-2 bg-zinc-900/80 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 hover:text-white rounded-xl text-xs font-bold transition active:scale-95 shadow-lg backdrop-blur-xs cursor-pointer"
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                          <span>返回影片列表</span>
+                        </button>
+                      </div>
+
+                      {/* Top right spec badges: 4K, HDR, Dolby */}
+                      <div className="absolute top-4 right-4 z-20 flex items-center space-x-1.5">
+                        <span className="text-[9px] font-bold tracking-wider font-mono bg-amber-500/90 text-zinc-950 px-2 py-0.5 rounded shadow-sm">
+                          4K ULTRA
+                        </span>
+                        <span className="text-[9px] font-bold tracking-wider font-mono bg-blue-600/90 text-white px-2 py-0.5 rounded shadow-sm hidden sm:inline">
+                          HDR
+                        </span>
+                        <span className="text-[9px] font-bold tracking-wider font-mono bg-zinc-800/90 text-zinc-300 px-2 py-0.5 rounded shadow-sm border border-zinc-700">
+                          DOLBY 5.1
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Part 2: POSTER METADATA AND DESCRIPTION ROW */}
+                  <div className="px-4 pb-6 sm:px-8 sm:pb-8 flex flex-col md:flex-row gap-5 md:gap-8 relative text-left z-10">
+                    {/* Overlapping Poster on Left - Fixed standard 2:3 ratio and sized smaller to match Emby */}
+                    <div className={`relative ${isPlaying ? 'hidden md:block' : 'block'} -mt-8 sm:-mt-12 md:-mt-16 w-24 h-36 sm:w-28 sm:h-42 md:w-32 md:h-48 bg-zinc-900 rounded-xl overflow-hidden shadow-3xl border-2 border-white/10 shrink-0 mx-auto md:mx-0 transition duration-300 group`}>
+                      <img
+                        src={currentVideo.pic}
+                        alt={currentVideo.name}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover transition-transform group-hover:scale-102"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          target.src = 'https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=250';
+                        }}
+                      />
+                      {currentVideo.remarks && (
+                        <div className="absolute bottom-2.5 right-2.5">
+                          <span className="text-[10px] bg-blue-650 text-white font-bold px-2 py-0.5 rounded shadow-lg">
+                            {currentVideo.remarks}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Metadata Content on Right */}
+                    <div className="flex-1 space-y-4 md:pt-4">
+                      <div className="space-y-2">
+                        {/* Title and Year */}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 justify-center md:justify-start2">
+                          <h2 className="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight drop-shadow-md text-white text-center md:text-left">
+                            {currentVideo.name}
+                          </h2>
+                          {currentVideo.year && (
+                            <span className="text-zinc-400 text-sm sm:text-base font-medium font-sans bg-zinc-900 border border-zinc-805 px-2 py-0.5 rounded-md shadow-inner">
+                              {currentVideo.year}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Badges checklist */}
+                        <div className="flex flex-wrap items-center gap-2 justify-center md:justify-start text-xs text-zinc-300">
+                          <span className="inline-flex items-center space-x-1 bg-amber-500/10 text-amber-400 border border-amber-500/20 font-extrabold px-2.5 py-0.5 rounded text-[11px] font-sans shadow-3xs">
+                            <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                            <span>{getRating(currentVideo.name)}</span>
+                          </span>
+                          
+                          {currentVideo.category && (
+                            <span className="bg-zinc-900 border border-zinc-800 font-bold px-2.5 py-0.5 rounded text-[11px]">
+                              {currentVideo.category}
+                            </span>
+                          )}
+                          
+                          {currentVideo.area && (
+                            <span className="bg-zinc-900 border border-zinc-800 font-bold px-2.5 py-0.5 rounded text-[11px]">
+                              {currentVideo.area}
+                            </span>
+                          )}
+                          
+                          {currentVideo.lang && (
+                            <span className="bg-zinc-900 border border-zinc-800 font-bold text-zinc-350 px-2.5 py-0.5 rounded text-[11px]">
+                              {currentVideo.lang}
+                            </span>
+                          )}
+
+                          <span className="bg-blue-955/20 text-blue-400 border border-blue-900/30 font-bold px-2 py-0.5 rounded text-[11px] font-mono shadow-3xs">
+                            🔥 {getPopularity(currentVideo.name)} 播放热度
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Cast Listing (Emby-Style Avatar Pills) */}
+                      {(currentVideo.director || currentVideo.actor) && (
+                        <div className="bg-zinc-900/40 border border-zinc-900 p-3 rounded-xl space-y-2 text-xs text-zinc-300">
+                          {currentVideo.director && (
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <span className="font-bold text-zinc-400 shrink-0">导演:</span>
+                              <div className="flex flex-wrap gap-1">
+                                {currentVideo.director.split(/[,/，、\s]+/).filter(d => d.trim() !== '').slice(0, 3).map((director, dIdx) => (
+                                  <span key={dIdx} className="bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded text-zinc-350 max-w-[120px] truncate">
+                                    {director}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {currentVideo.actor && (
+                            <div className="flex flex-col gap-2">
+                              <span className="font-bold text-zinc-450">主演阵容:</span>
+                              <div className="flex flex-wrap gap-2">
+                                {currentVideo.actor.split(/[,/，、\s]+/).filter(a => a.trim() !== '').slice(0, 5).map((actor, aIdx) => {
+                                  const bgColors = ['bg-indigo-600', 'bg-emerald-600', 'bg-rose-600', 'bg-amber-600', 'bg-purple-600'];
+                                  const colorClass = bgColors[actor.charCodeAt(0) % bgColors.length];
+                                  return (
+                                    <div key={aIdx} className="inline-flex items-center space-x-1.5 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 rounded-full pl-1 pr-2.5 py-0.5 text-xs text-zinc-300 transition shadow-2xs hover:border-zinc-700">
+                                      <div className={`h-[18px] w-[18px] rounded-full ${colorClass} text-white flex items-center justify-center font-bold text-[9px] shrink-0`}>
+                                        {actor.trim().charAt(0)}
+                                      </div>
+                                      <span className="max-w-[80px] truncate">{actor}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Brief line plot / Introduction text */}
+                      <div className="space-y-1.5 text-xs sm:text-[13px] leading-relaxed text-zinc-300">
+                        <span className="font-bold text-zinc-400 block border-b border-zinc-900 pb-1.5">🎬 剧情简介 / Storylines</span>
+                        <p className="font-sans leading-relaxed text-zinc-455 max-h-36 overflow-y-auto whitespace-pre-line pl-1 pr-1 font-light" title="影片详情介绍">
+                          {currentVideo.content ? currentVideo.content.replace(/<[^>]*>/g, '').trim() : '暂无此影片的详细中文剧情描述，可以直接播放观看视频。'}
+                        </p>
+                      </div>
+
+                      {/* Control Panel Buttons Row */}
+                      <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-zinc-900 justify-center md:justify-start">
+                        <button
+                          onClick={() => {
+                            setIsPlaying(true);
+                            const target = document.getElementById('active-player-room');
+                            if (target) {
+                              target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                            }
+                          }}
+                          className="px-5 py-2.5 bg-blue-650 hover:bg-blue-550 text-white font-bold text-xs sm:text-sm rounded-xl transition duration-200 flex items-center space-x-1.5 shadow-lg active:scale-95 cursor-pointer"
+                        >
+                          <Play className="h-3.5 w-3.5 fill-white" />
+                          <span>一键立即放映</span>
+                        </button>
+
+                        <button
+                          onClick={() => toggleFavorite(currentVideo)}
+                          className={`px-4 py-2.5 text-xs sm:text-sm font-bold rounded-xl border transition duration-200 flex items-center space-x-1.5 cursor-pointer active:scale-95 ${
+                            favorites.some(item => String(item.id) === String(currentVideo.id))
+                              ? 'bg-rose-600 border-rose-600 hover:bg-rose-550 text-white shadow-md'
+                              : 'bg-zinc-900/80 border-zinc-800 hover:bg-zinc-800 text-zinc-300'
+                          }`}
+                        >
+                          <Heart className={`h-4 w-4 ${favorites.some(item => String(item.id) === String(currentVideo.id)) ? 'fill-current text-white animate-pulse' : 'text-zinc-400'}`} />
+                          <span>{favorites.some(item => String(item.id) === String(currentVideo.id)) ? '已入臻选片单' : '加入收藏片单'}</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(window.location.origin + '?id=' + currentVideo.id);
+                            showToast('本影片的私有极简影院专属分享播放直链已复制。', 'success');
+                          }}
+                          className="px-4 py-2.5 bg-zinc-900/80 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 text-xs sm:text-sm font-bold rounded-xl transition duration-200 flex items-center space-x-1.5 cursor-pointer active:scale-95"
+                        >
+                          <Share2 className="h-4 w-4" />
+                          <span>分享影片</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Part 3: CHANNELS, MOUNTED ROUTER LINES AND PLAY SELECTORS */}
+                  <div className="p-4 sm:p-6 bg-zinc-900/40 rounded-b-2xl border-t border-zinc-905 space-y-4 text-left relative z-10">
+                    {parsedServers.length > 0 ? (
+                      <div className="space-y-4">
+                        {/* Server/Line selector row */}
+                        <div className="space-y-2">
+                          <span className="text-xs font-bold text-zinc-400 flex items-center space-x-1">
+                            <Layers className="h-3.5 w-3.5 text-blue-550" />
+                            <span>请选择播放传输线路:</span>
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            {parsedServers.map((server, sIdx) => (
+                              <button
+                                key={sIdx}
+                                onClick={() => {
+                                  setCurrentServerIndex(sIdx);
+                                  setCurrentEpisodeIndex(0);
+                                  if (server.episodes.length > 0) {
+                                    setCurrentPlayUrl(server.episodes[0].url);
+                                  }
+                                }}
+                                className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 ${
+                                  currentServerIndex === sIdx
+                                    ? 'bg-blue-600 text-white shadow-md'
+                                    : 'bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400'
+                                }`}
+                              >
+                                <Tv className="h-3.5 w-3.5 shrink-0" />
+                                <span>{server.name} ({server.episodes.length} 集)</span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Episode selector grids (with auto scroll indicator) */}
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="font-bold text-zinc-400 flex items-center space-x-1">
+                              <Play className="h-3.5 w-3.5 text-blue-550" />
+                              <span>影视分集选集:</span>
+                            </span>
+                            <span className="text-[10px] text-zinc-500 font-mono">
+                              共 {parsedServers[currentServerIndex]?.episodes.length || 0} 个分集
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2 max-h-52 overflow-y-auto p-2 bg-zinc-950 rounded-xl border border-zinc-900">
+                            {parsedServers[currentServerIndex]?.episodes.map((ep, eIdx) => {
+                              const isSelected = currentEpisodeIndex === eIdx && isPlaying;
+                              return (
+                                <button
+                                  id={`ep-btn-${currentServerIndex}-${eIdx}`}
+                                  key={eIdx}
+                                  onClick={() => {
+                                    handleSelectEpisode(currentServerIndex, eIdx, ep.url);
+                                    setIsPlaying(true);
+                                    // Smooth scroll to top player when an episode is selected
+                                    const target = document.getElementById('active-player-room');
+                                    if (target) {
+                                      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                    }
+                                  }}
+                                  className={`py-2 px-2.5 rounded-lg text-xs font-semibold truncate text-center cursor-pointer transition border ${
+                                    isSelected
+                                      ? 'bg-blue-600 border-blue-500 text-white font-extrabold shadow-sm'
+                                      : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border-zinc-800 hover:border-zinc-750'
+                                  }`}
+                                  title={ep.name}
+                                >
+                                  {ep.name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center py-6 text-xs text-zinc-500">
+                        正在解析当前影视的数据通道... 如果长时间未载出列表，说明该资源的连接异常，您可以尝试切换其他线路。
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* SEARCH FILTER WRAPPER */}
+              <SearchAndFilter
+                categories={categories}
+                selectedCategoryId={selectedCategoryId}
+                onSelectCategory={(id) => {
+                  setSelectedCategoryId(id);
+                  setCurrentPage(1); // reset to page 1
+                }}
+                onSearch={(keyword) => {
+                  setSearchKeyword(keyword);
+                  setCurrentPage(1); // reset to page 1
+                }}
+                currentSearch={searchKeyword}
+              />
+
+              {/* FAVORITES PLATFORM */}
+              {favorites.length > 0 && (
+                <div className="bg-[#121212] rounded-2xl border border-zinc-900 p-4 sm:p-5 shadow-xl space-y-3.5" id="favorites-panel">
+                  <div className="flex items-center justify-between border-b border-zinc-850 pb-2.5">
+                    <div className="flex items-center space-x-2">
+                      <Heart className="h-4 w-4 text-red-500 fill-red-500 animate-pulse" />
+                      <span className="text-xs sm:text-sm font-bold text-zinc-100">臻选收藏片单 / My Favorites</span>
+                      <span className="text-[10px] bg-red-950 text-red-400 px-2.5 py-0.5 rounded-full font-bold border border-red-900/30">
+                        {favorites.length}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setFavorites([]);
+                        localStorage.removeItem('favorites');
+                        showToast('臻选片单已清空', 'info');
+                      }}
+                      className="text-[10px] text-zinc-400 hover:text-red-500 font-bold hover:underline transition flex items-center space-x-1 border border-zinc-800 hover:border-zinc-700 px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-red-950/20 shadow-sm"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      <span>清空收藏</span>
+                    </button>
+                  </div>
+
+                  {/* Scrollable container */}
+                  <div className="flex gap-3.5 overflow-x-auto pb-1.5 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+                    {favorites.map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => handleSelectVideo(item)}
+                        className="relative min-w-[200px] max-w-[240px] flex-none bg-zinc-900/40 hover:bg-red-950/5 border border-zinc-900 hover:border-red-900/40 rounded-xl p-2.5 flex gap-3 cursor-pointer transition duration-200 group"
+                      >
+                        {/* Film pic */}
+                        <div className="relative w-12 h-16 rounded-md overflow-hidden bg-zinc-950 shadow-sm shrink-0">
+                          <img
+                            src={item.pic}
+                            alt={item.name}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              target.src = 'https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=200';
+                            }}
+                          />
+                        </div>
+
+                        {/* Text detail */}
+                        <div className="flex-1 min-w-0 flex flex-col justify-center whitespace-nowrap">
+                          <h4 className="text-xs font-bold text-zinc-150 group-hover:text-red-500 transition truncate" title={item.name}>
+                            {item.name}
+                          </h4>
+                          <p className="text-[10px] text-zinc-500 truncate">
+                            {item.category || '电影'} · {item.remarks || '极清'}
+                          </p>
+                          <div className="mt-1 text-[9px] text-red-500 font-semibold flex items-center space-x-0.5">
+                            <Star className="h-2.5 w-2.5 fill-red-500 text-red-500" />
+                            <span>评分: {getRating(item.name)}</span>
+                          </div>
+                        </div>
+
+                        {/* Individual close action */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFavorites(prev => {
+                              const updated = prev.filter(f => String(f.id) !== String(item.id));
+                              localStorage.setItem('favorites', JSON.stringify(updated));
+                              return updated;
+                            });
+                            showToast('已移出收藏片单', 'info');
+                          }}
+                          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-500 hover:bg-red-950/35 transition shadow-sm opacity-0 group-hover:opacity-100"
+                          title="移出收藏"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* WATCH HISTORY PORTAL */}
+              {watchHistory.length > 0 && (
+                <div className="bg-[#121212] rounded-2xl border border-zinc-900 p-4 sm:p-5 shadow-xl space-y-3.5" id="watch-history-panel">
+                  <div className="flex items-center justify-between border-b border-zinc-850 pb-2.5">
+                    <div className="flex items-center space-x-2">
+                      <History className="h-4 w-4 text-red-500 animate-pulse" />
+                      <span className="text-xs sm:text-sm font-bold text-zinc-100">极速续播通道 / 我的播放历史</span>
+                      <span className="text-[10px] bg-red-950 text-red-400 px-2.5 py-0.5 rounded-full font-bold border border-red-900/30">
+                        {watchHistory.length}
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleClearAllHistory}
+                      className="text-[10px] text-red-500 hover:text-red-600 font-bold hover:underline transition flex items-center space-x-1 border border-zinc-800 hover:border-zinc-700 px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-red-950/20 shadow-sm"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      <span>清空历史</span>
+                    </button>
+                  </div>
+
+                  {/* Scrollable container */}
+                  <div className="flex gap-3.5 overflow-x-auto pb-1.5 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+                    {watchHistory.map((item) => (
+                      <div
+                        key={item.id}
+                        onClick={() => handleResumeHistory(item)}
+                        className="relative min-w-[240px] max-w-[280px] flex-none bg-zinc-900/40 hover:bg-red-950/5 border border-zinc-900 hover:border-red-900/40 rounded-xl p-2.5 flex gap-3 cursor-pointer transition duration-200 group"
+                      >
+                        {/* Film pic */}
+                        <div className="relative w-12 h-16 rounded-md overflow-hidden bg-zinc-950 shadow-sm shrink-0">
+                          <img
+                            src={item.pic}
+                            alt={item.name}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement;
+                              target.src = 'https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=200';
+                            }}
+                          />
+                        </div>
+
+                        {/* Text detail */}
+                        <div className="flex-1 min-w-0 flex flex-col justify-between whitespace-nowrap">
+                          <div className="space-y-0.5">
+                            <h4 className="text-xs font-bold text-zinc-150 group-hover:text-red-500 transition truncate" title={item.name}>
+                              {item.name}
+                            </h4>
+                            <p className="text-[10px] text-zinc-500 truncate">
+                              [{item.category || '电影'}] · {item.remarks || 'HD'}
+                            </p>
+                          </div>
+
+                          <div className="space-y-0.5">
+                            <div className="text-[10px] text-red-400 bg-red-950/40 border border-red-900/25 rounded px-1.5 py-0.5 inline-block font-sans font-semibold truncate max-w-full">
+                              上次播到: {item.lastPlayedEpisodeName}
+                            </div>
+                            <div className="text-[9px] text-red-500 font-bold group-hover:underline flex items-center space-x-0.5">
+                              <span>⚡ 极速一键续播</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Individual close action */}
+                        <button
+                          onClick={(e) => handleDeleteHistory(item.id, e)}
+                          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-red-500 hover:bg-red-950/35 transition shadow-sm opacity-0 group-hover:opacity-100"
+                          title="删除记录"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* VIDEO GRID & COLLECTION COUNTERS */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <h3 className="text-base font-bold tracking-tight text-zinc-100">
+                      {searchKeyword ? `🔍 "${searchKeyword}" 的搜索结果` : '🎥 最新影视资源库'}
+                    </h3>
+                    <p className="text-xs text-zinc-500">
+                      数据源：<span className="text-zinc-350 font-semibold">[{settings.cmsSources.find(c => c.id === settings.selectedCmsId)?.name || '默认'}]</span>
+                      ，共采集到约 <span className="text-red-500 font-extrabold font-mono">{totalCount}</span> 部影片资源
+                    </p>
+                  </div>
+                  
+                  {/* Quick Reload/Refresh Button */}
+                  <button
+                    onClick={() => {
+                      const curCms = settings.cmsSources.find(c => c.id === settings.selectedCmsId);
+                      if (curCms) fetchVideosFromCms(curCms.url, currentPage, selectedCategoryId, searchKeyword, true);
+                      showToast('数据重载成功');
+                    }}
+                    className="p-2 bg-zinc-900 border border-zinc-800 rounded-lg hover:bg-zinc-800 text-zinc-300 hover:text-white transition shadow-md flex items-center space-x-1.5 text-xs font-bold cursor-pointer"
+                    title="刷新当前列表"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">刷新列表</span>
+                  </button>
+                </div>
+
+                {loadingVideos ? (
+                  /* Elegant skeletal loader grid */
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4" id="grid-loader">
+                    {[...Array(12)].map((_, index) => (
+                      <div key={index} className="bg-[#141414] rounded-xl border border-zinc-900 overflow-hidden flex flex-col space-y-3 animate-pulse h-72">
+                        <div className="aspect-[3/4] bg-zinc-905 w-full" />
+                        <div className="p-3 space-y-2">
+                          <div className="h-3.5 bg-zinc-800 rounded-sm w-3/4" />
+                          <div className="h-3 bg-zinc-850 rounded-sm w-1/2" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : videos.length > 0 ? (
+                  /* Video cards layout */
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4" id="movie-grid-viewport">
+                    {videos.map((movie) => (
+                      <VideoCard
+                        key={movie.id}
+                        video={movie}
+                        onClick={() => handleSelectVideo(movie)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  /* Empty state error */
+                  <div className="bg-[#141414] text-center rounded-2xl border border-zinc-900 p-12 flex flex-col items-center justify-center space-y-3" id="movie-grid-empty">
+                    <div className="p-3 bg-red-950/20 text-red-500 rounded-full border border-red-900/30">
+                      <AlertTriangle className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-zinc-100 text-sm">未采集到相匹配的影片对象</h4>
+                      <p className="text-zinc-500 text-xs mt-1.5 max-w-sm mx-auto leading-relaxed">
+                        可能这线路的资源库没有收录相关影片，或者您的自定义采集字段与该站点的API不对应。可以前往 <span className="text-red-500 underline font-semibold cursor-pointer" onClick={() => { setActiveTab('admin'); setAdminTab('config'); }}>采集规则设置</span> 调整为它的字典格式。
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* PAGINATION PANEL */}
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-center space-x-3.5 pt-6" id="pagination-controls-row">
+                    <button
+                      id="btn-page-prev"
+                      onClick={() => {
+                        if (currentPage > 1) setCurrentPage(currentPage - 1);
+                      }}
+                      disabled={currentPage === 1}
+                      className={`p-2 rounded-xl border transition flex items-center justify-center ${
+                        currentPage === 1
+                          ? 'bg-zinc-900/40 text-zinc-650 border-zinc-800/40 cursor-not-allowed'
+                          : 'bg-zinc-900 hover:bg-zinc-850 border-zinc-800 text-zinc-100 shadow-md cursor-pointer'
+                      }`}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    
+                    <span className="text-xs font-bold text-zinc-400 font-mono">
+                      第 {currentPage} 页 / 共 {totalPages} 页
+                    </span>
+
+                    <button
+                      id="btn-page-next"
+                      onClick={() => {
+                        if (currentPage < totalPages) setCurrentPage(currentPage + 1);
+                      }}
+                      disabled={currentPage === totalPages}
+                      className={`p-2 rounded-xl border transition flex items-center justify-center ${
+                        currentPage === totalPages
+                          ? 'bg-zinc-900/40 text-zinc-650 border-zinc-800/40 cursor-not-allowed'
+                          : 'bg-zinc-900 hover:bg-zinc-850 border-zinc-800 text-zinc-100 shadow-md cursor-pointer'
+                      }`}
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: ADMIN BACKOFFICE */}
+          {activeTab === 'admin' && (
+            <div className="space-y-6">
+              {!isAdminLoggedIn ? (
+                /* Elegant Login Form Card */
+                <div className="max-w-md mx-auto my-12 bg-[#141414] rounded-2xl border border-zinc-900 overflow-hidden shadow-2xl animate-fade-in">
+                  <div className="p-6 bg-gradient-to-br from-red-700 to-red-950 text-white text-center">
+                    <div className="inline-flex p-3 bg-white/10 rounded-full border border-white/20 mb-3">
+                      <Lock className="h-6 w-6 text-white animate-pulse" />
+                    </div>
+                    <h3 className="font-extrabold text-lg font-sans tracking-wide">CINEFLOW 系统管理后台</h3>
+                    <p className="text-xs text-red-200 mt-1 uppercase tracking-wider font-mono">AUTHORIZED ADMINISTRATOR CAPTCHAS</p>
+                  </div>
+
+                  <form 
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (loginUsername === 'aobaba' && loginPassword === 'a123456a') {
+                        setIsAdminLoggedIn(true);
+                        setLoginError('');
+                        showToast('登录管理后台成功！', 'success');
+                        sessionStorage.setItem('isAdminLoggedIn', 'true');
+                      } else {
+                        setLoginError('用户名或密码不正确，请重新输入');
+                        showToast('用户名或密码错误，请检查！', 'error');
+                      }
+                    }}
+                    className="p-6 space-y-4"
+                  >
+                    {loginError && (
+                      <div className="p-3 bg-rose-950/35 border border-rose-900/30 rounded-xl text-rose-450 text-xs font-semibold flex items-center space-x-1.5 animate-bounce">
+                        <AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" />
+                        <span>{loginError}</span>
+                      </div>
+                    )}
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-zinc-400 block">管理员用户名</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-3.5 text-zinc-550">
+                          <User className="h-4 w-4" />
+                        </span>
+                        <input
+                          type="text"
+                          required
+                          value={loginUsername}
+                          onChange={(e) => setLoginUsername(e.target.value)}
+                          placeholder="请输入管理员账号..."
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2.5 pl-9 pr-3 text-xs text-zinc-100 placeholder-zinc-600 focus:ring-1 focus:ring-red-500 focus:outline-hidden"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 md:pb-2">
+                      <label className="text-xs font-bold text-zinc-400 block">系统管理密码</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-3.5 text-zinc-550">
+                          <Key className="h-4 w-4" />
+                        </span>
+                        <input
+                          type="password"
+                          required
+                          value={loginPassword}
+                          onChange={(e) => setLoginPassword(e.target.value)}
+                          placeholder="请输入密码..."
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2.5 pl-9 pr-3 text-xs text-zinc-100 placeholder-zinc-600 focus:ring-1 focus:ring-red-500 focus:outline-hidden"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full bg-red-600 hover:bg-red-700 text-white font-bold text-xs py-3 rounded-xl transition duration-200 shadow-lg flex items-center justify-center space-x-1 focus:ring-2 focus:ring-red-500 focus:outline-hidden active:scale-98 cursor-pointer"
+                    >
+                      <Lock className="h-3.5 w-3.5" />
+                      <span>验证凭证并登录系统</span>
+                    </button>
+                  </form>
+                </div>
+              ) : (
+                /* Authenticated State view - Render internal tabs with subnavigation */
+                <div className="space-y-6">
+                  {/* Subnav for backoffice */}
+                  <div className="bg-[#141414] rounded-2xl border border-zinc-900 p-3 shadow-xl flex justify-between items-center flex-wrap gap-3">
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => setAdminTab('config')}
+                        className={`px-4 py-2 text-xs font-bold rounded-xl border transition flex items-center space-x-1.5 cursor-pointer ${
+                          adminTab === 'config'
+                            ? 'bg-red-650 text-white border-red-650 shadow-md'
+                            : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-350 hover:text-white'
+                        }`}
+                      >
+                        <Settings className="h-3.5 w-3.5" />
+                        <span>自定义采集与解析配置</span>
+                      </button>
+                      <button
+                        onClick={() => setAdminTab('guide')}
+                        className={`px-4 py-2 text-xs font-bold rounded-xl border transition flex items-center space-x-1.5 cursor-pointer ${
+                          adminTab === 'guide'
+                            ? 'bg-red-650 text-white border-red-650 shadow-md'
+                            : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-350 hover:text-white'
+                        }`}
+                      >
+                        <BookOpen className="h-3.5 w-3.5" />
+                        <span>系统自学与配置指南</span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center space-x-2 text-[10px] text-zinc-400">
+                      <span className="hidden sm:inline bg-zinc-900 text-zinc-400 border border-zinc-800 font-bold px-2 py-1 rounded">
+                        账户: aobaba (超级管理员)
+                      </span>
+                      <button
+                        onClick={() => {
+                          setIsAdminLoggedIn(false);
+                          sessionStorage.removeItem('isAdminLoggedIn');
+                          setActiveTab('home');
+                          showToast('您已成功退出后台管理模式');
+                        }}
+                        className="text-red-500 hover:text-red-650 font-bold hover:underline py-1.5 px-3 rounded-lg border border-zinc-800 hover:border-red-900 bg-zinc-900 hover:bg-red-950/20 transition flex items-center space-x-1 cursor-pointer"
+                      >
+                        <LogOut className="h-3 w-3" />
+                        <span>退出登录</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* SUB SECTION: CONFIG (自定义采集与解析) */}
+                  {adminTab === 'config' && (
+                    <div className="space-y-6" id="settings-tab-panel">
+                      
+                      <div className="flex items-center space-x-3 pb-2 border-b border-zinc-200">
+                        <span className="p-2 bg-blue-50 text-blue-600 rounded-lg">
+                          <Settings className="h-5 w-5" />
+                        </span>
+                        <div>
+                          <h3 className="text-base font-bold text-zinc-805">采集规则与接口网关控制器</h3>
+                          <p className="text-xs text-zinc-400">在此实时增减外部CMS JSON数据池和M3U8万能播放流解析服务（保存后即存入后端，永久生效）</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                        {/* Left side: Customize Sources Appenders */}
+                        <div className="bg-white rounded-2xl border border-zinc-200 p-5 space-y-4 shadow-xs">
+                          <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                            <div className="flex items-center space-x-2">
+                              <Layers className="h-4 w-4 text-blue-600" />
+                              <h4 className="text-sm font-bold text-zinc-800">1. CMS采集网关设置</h4>
+                            </div>
+                            <span className="text-[10px] bg-zinc-100 p-1 rounded font-mono text-zinc-500">JSON/GET 绑定接口</span>
+                          </div>
+
+                          {/* Add Source form */}
+                          <div className="bg-zinc-50 p-4 rounded-xl border border-zinc-150 space-y-3">
+                            <span className="text-xs font-semibold text-zinc-700 block">➕ 新增资源采集节点</span>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                              <div className="space-y-1">
+                                <label className="text-[10px] text-zinc-500 font-bold block uppercase">节点名称 (例如: 无忧资源)</label>
+                                <input
+                                  id="new-cms-name"
+                                  type="text"
+                                  value={tempCmsName}
+                                  onChange={(e) => setTempCmsName(e.target.value)}
+                                  placeholder="资源站简称..."
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] text-zinc-500 font-bold block uppercase">网关 JSON-API URL 端点</label>
+                                <input
+                                  id="new-cms-url"
+                                  type="text"
+                                  value={tempCmsUrl}
+                                  onChange={(e) => setTempCmsUrl(e.target.value)}
+                                  placeholder="https://api.domain.com/provide/vod/at/json"
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                                />
+                              </div>
+                            </div>
+                            <button
+                              id="save-new-cms-btn"
+                              onClick={handleAddNewCms}
+                              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 px-3 rounded-md transition shadow-xs flex items-center justify-center space-x-1"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              <span>添加到多源采集总线</span>
+                            </button>
+                          </div>
+
+                          {/* Existing Source list */}
+                          <div className="space-y-2">
+                            <span className="text-xs font-bold text-zinc-500 tracking-wide block">目前已连接的数据站 (点击任意行即可设定为主采集源)：</span>
+                            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                              {settings.cmsSources && settings.cmsSources.map((source) => {
+                                const isSelected = settings.selectedCmsId === source.id;
+                                return (
+                                  <div
+                                    key={source.id}
+                                    onClick={() => {
+                                      const nextSettings = { ...settings, selectedCmsId: source.id };
+                                      setSettings(nextSettings);
+                                      saveAllSettingsToServer(nextSettings);
+                                      setCurrentPage(1);
+                                      setSelectedCategoryId('');
+                                      setSearchKeyword('');
+                                      showToast(`已成功切换当前主采集源: ${source.name}`);
+                                    }}
+                                    className={`flex items-center justify-between p-3 rounded-xl border cursor-pointer transition select-none ${
+                                      isSelected
+                                        ? 'bg-blue-50/70 border-blue-400 shadow-2xs'
+                                        : 'bg-zinc-50 border-zinc-200 hover:bg-zinc-100 hover:border-zinc-300'
+                                    }`}
+                                  >
+                                    <div className="truncate flex-1 pr-3">
+                                      <div className="flex items-center space-x-1.5">
+                                        <span className={`font-bold text-xs ${isSelected ? 'text-blue-700 font-extrabold' : 'text-zinc-800'}`}>
+                                          {source.name}
+                                        </span>
+                                        {isSelected && (
+                                          <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded-sm scale-90 font-sans font-medium">当前主站</span>
+                                        )}
+                                      </div>
+                                      <span className="text-[9px] text-zinc-400 font-mono block truncate mt-1">地址: {source.url}</span>
+                                    </div>
+                                    
+                                    <div className="flex items-center space-x-2" onClick={(e) => e.stopPropagation()}>
+                                      {!isSelected ? (
+                                        <button
+                                          onClick={() => {
+                                            const nextSettings = { ...settings, selectedCmsId: source.id };
+                                            setSettings(nextSettings);
+                                            saveAllSettingsToServer(nextSettings);
+                                            setCurrentPage(1);
+                                            setSelectedCategoryId('');
+                                            setSearchKeyword('');
+                                            showToast(`已成功切换当前主采集源: ${source.name}`);
+                                          }}
+                                          className="text-[10px] px-2 py-1 rounded bg-white hover:bg-zinc-100 text-zinc-650 border border-zinc-300 shadow-2xs font-semibold hover:text-zinc-900 transition-colors"
+                                        >
+                                          设为主源
+                                        </button>
+                                      ) : (
+                                        <span className="text-[10px] font-bold text-blue-600 px-1 flex items-center space-x-0.5">
+                                          <Check className="h-3 w-3" />
+                                          <span>激活中</span>
+                                        </span>
+                                      )}
+                                      <button
+                                        id={`del-cms-${source.id}`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleDeleteCms(source.id, e);
+                                        }}
+                                        className="p-1 rounded-md hover:bg-rose-50 text-rose-500 transition hover:text-rose-650"
+                                        title="删除此接口"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Right side: M3U8 Parsers */}
+                        <div className="bg-white rounded-2xl border border-zinc-200 p-5 space-y-4 shadow-xs">
+                          <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+                            <div className="flex items-center space-x-2">
+                              <Tv className="h-4 w-4 text-emerald-600" />
+                              <h4 className="text-sm font-bold text-zinc-800">2. M3U8播放内核与解析网关</h4>
+                            </div>
+                            <span className="text-[10px] bg-emerald-55 text-emerald-750 px-2 py-0.5 rounded font-semibold">配置解析</span>
+                          </div>
+
+                          {/* ACTIVE PLAYBACK ENGINE SELECTOR */}
+                          <div className="bg-emerald-50/60 p-4 rounded-xl border border-emerald-100/80 space-y-2.5">
+                            <div className="flex items-center space-x-1.5 pb-1 border-b border-emerald-100">
+                              <SlidersHorizontal className="h-3.5 w-3.5 text-emerald-700" />
+                              <span className="text-xs font-bold text-emerald-850">当前生效的播放内核 / 解析引擎选择</span>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <select
+                                value={settings.selectedParserId}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  const nextSettings = { ...settings, selectedParserId: val };
+                                  setSettings(nextSettings);
+                                  saveAllSettingsToServer(nextSettings);
+                                  showToast(`播放内核已成功设定为: ${val === 'internal' ? '内置极速解码器' : '自定义网页解析器'}`);
+                                }}
+                                className="w-full bg-white border border-emerald-200 rounded-lg py-1.5 px-3 text-xs font-semibold text-zinc-805 focus:outline-hidden focus:border-emerald-500"
+                                id="aside-parser-dropdown"
+                              >
+                                <option value="internal">✨ HlsJS 本地极速无广告流播放器 (默认推荐)</option>
+                                {settings.m3u8Parsers && settings.m3u8Parsers.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    🔗 {p.name}
+                                  </option>
+                                ))}
+                              </select>
+                              <p className="text-[11px] text-emerald-700 leading-relaxed font-sans">
+                                提示: 建议默认使用内置播放器（极速无广告、低负载）。如特定视频因跨域或不兼容无法播放，可在此随时一键切换为任意第三方网关解析。
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Add Parser form */}
+                          <div className="bg-zinc-50 p-4 rounded-xl border border-zinc-150 space-y-3">
+                            <span className="text-xs font-semibold text-zinc-700 block">➕ 新增三方极速解析接口</span>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                              <div className="space-y-1">
+                                <label className="text-[10px] text-zinc-500 font-bold block uppercase">解析站名称 (如: 小猫解析)</label>
+                                <input
+                                  id="new-parser-name"
+                                  type="text"
+                                  value={tempParserName}
+                                  onChange={(e) => setTempParserName(e.target.value)}
+                                  placeholder="极速解析..."
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-emerald-500 focus:outline-hidden"
+                                />
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[10px] text-zinc-500 font-bold block uppercase">解析Iframe接口 (需携带 = 号)</label>
+                                <input
+                                  id="new-parser-url"
+                                  type="text"
+                                  value={tempParserUrl}
+                                  onChange={(e) => setTempParserUrl(e.target.value)}
+                                  placeholder="https://jx.player.com/?url="
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-emerald-500 focus:outline-hidden"
+                                />
+                              </div>
+                            </div>
+                            <button
+                              id="save-new-parser-btn"
+                              onClick={handleAddNewParser}
+                              className="w-full bg-emerald-650 hover:bg-emerald-700 text-white font-bold text-xs py-2 px-3 rounded-md transition shadow-xs flex items-center justify-center space-x-1"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              <span>添加到外部网页播放器解析池</span>
+                            </button>
+                          </div>
+
+                          {/* Existing Parser list */}
+                          <div className="space-y-2">
+                            <span className="text-xs font-bold text-zinc-500 tracking-wide block">当前支持的外部网页解析器 ({settings.m3u8Parsers?.length || 0})：</span>
+                            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                              <div className="flex items-center justify-between p-3.5 bg-blue-50/50 rounded-xl border border-blue-105 text-xs">
+                                <div className="truncate flex-1 pr-3">
+                                  <span className="font-bold text-blue-800 block">✨ HlsJS 内置极速流播放器</span>
+                                  <span className="text-[9px] text-blue-500 font-mono block truncate mt-0.5">直接读取并解析 M3U8 流，无任何网页弹窗 or 恶意广告</span>
+                                </div>
+                                <span className="px-2 py-0.5 bg-blue-150 text-blue-750 font-bold rounded-sm text-[9px]">独家内置</span>
+                              </div>
+
+                              {settings.m3u8Parsers && settings.m3u8Parsers.map((p) => (
+                                <div
+                                  key={p.id}
+                                  className="flex items-center justify-between p-3.5 bg-zinc-50 rounded-xl border border-zinc-200 text-xs"
+                                >
+                                  <div className="truncate flex-1 pr-3">
+                                    <span className="font-bold text-zinc-800 block">{p.name}</span>
+                                    <span className="text-[9px] text-zinc-400 font-mono block truncate mt-0.5">{p.url}</span>
+                                  </div>
+                                  <button
+                                    id={`del-parser-${p.id}`}
+                                    onClick={(e) => handleDeleteParser(p.id, e)}
+                                    className="p-1.5 rounded-md hover:bg-rose-50 text-rose-500 transition hover:text-rose-655"
+                                    title="从列表清理"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                      </div>
+
+                      {/* SECTION 3: DETAILED SCRAPING DICTIONARY RULES MAPPER */}
+                      <div className="bg-white rounded-2xl border border-zinc-200 p-6 space-y-4 shadow-xs">
+                        <div className="flex items-center space-x-2 border-b border-zinc-100 pb-3.5">
+                          <Sliders className="h-4.5 w-4.5 text-blue-600" />
+                          <div>
+                            <h4 className="text-sm font-bold text-zinc-800">3. 自定义大类采集数据字典规则</h4>
+                            <p className="text-xs text-zinc-400">资源站返回格式不同时，请调整下方属性名称，即可完美解析匹配几乎所有的标准/苹果CMS JSON接口！</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+                          <div className="space-y-1.5">
+                            <label className="font-bold text-zinc-700">影片名称映射 Key (titleKey)</label>
+                            <input
+                              id="rule-title-key"
+                              type="text"
+                              value={rules.titleKey}
+                              onChange={(e) => setRules(prev => ({ ...prev, titleKey: e.target.value }))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="font-bold text-zinc-700">影片缩略图 Key (picKey)</label>
+                            <input
+                              id="rule-pic-key"
+                              type="text"
+                              value={rules.picKey}
+                              onChange={(e) => setRules(prev => ({ ...prev, picKey: e.target.value }))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="font-bold text-zinc-700">影片分类或类型 Key (categoryKey)</label>
+                            <input
+                              id="rule-cat-key"
+                              type="text"
+                              value={rules.categoryKey}
+                              onChange={(e) => setRules(prev => ({ ...prev, categoryKey: e.target.value }))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="font-bold text-zinc-700">影片播放字段 Key (playUrlKey)</label>
+                            <input
+                              id="rule-url-key"
+                              type="text"
+                              value={rules.playUrlKey}
+                              onChange={(e) => setRules(prev => ({ ...prev, playUrlKey: e.target.value }))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs pt-2">
+                          <div className="space-y-1.5">
+                            <label className="font-bold text-zinc-700">影片集数备注 Key (remarksKey)</label>
+                            <input
+                              id="rule-remarks-key"
+                              type="text"
+                              value={rules.remarksKey}
+                              onChange={(e) => setRules(prev => ({ ...prev, remarksKey: e.target.value }))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="font-bold text-zinc-700">剧情大纲剧情 Key (contentKey)</label>
+                            <input
+                              id="rule-content-key"
+                              type="text"
+                              value={rules.contentKey}
+                              onChange={(e) => setRules(prev => ({ ...prev, contentKey: e.target.value }))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="font-bold text-zinc-700">播放来源名称 Key (playFromServerKey)</label>
+                            <input
+                              id="rule-from-key"
+                              type="text"
+                              value={rules.playFromServerKey}
+                              onChange={(e) => setRules(prev => ({ ...prev, playFromServerKey: e.target.value }))}
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Split delimiters parsing rules */}
+                        <div className="space-y-2 border-t border-zinc-100 pt-4">
+                          <span className="text-xs font-bold text-zinc-700 block">CMS 集数拼写规则特殊切割符号</span>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-zinc-500 font-semibold block">线路/服务器 切分符 例: $$$</label>
+                              <input
+                                id="split-server-input"
+                                type="text"
+                                value={rules.splitPlayServer}
+                                onChange={(e) => setRules(prev => ({ ...prev, splitPlayServer: e.target.value }))}
+                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-zinc-500 font-semibold block">具体剧集 切分符 例: #</label>
+                              <input
+                                id="split-ep-input"
+                                type="text"
+                                value={rules.splitPlayEpisode}
+                                onChange={(e) => setRules(prev => ({ ...prev, splitPlayEpisode: e.target.value }))}
+                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] text-zinc-500 font-semibold block">每集名称 与 视频地址 切分符 例: $</label>
+                              <input
+                                id="split-name-url-input"
+                                type="text"
+                                value={rules.splitPlayNameAndUrl}
+                                onChange={(e) => setRules(prev => ({ ...prev, splitPlayNameAndUrl: e.target.value }))}
+                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="pt-3 border-t border-zinc-100 flex items-center justify-between flex-wrap gap-3">
+                          <div className="text-[11px] text-zinc-400">
+                            💡 默认苹果CMS标准配置为 <b>vod_name / vod_pic / vod_play_url</b> ，分隔符为 <b>$$$ / # / $</b> 。
+                          </div>
+                          <button
+                            id="save-rules-btn"
+                            onClick={handleSaveScrapingRules}
+                            className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-lg transition shadow-xs flex items-center space-x-1"
+                          >
+                            <Check className="h-4 w-4" />
+                            <span>保存并应用所有数据切分规则</span>
+                          </button>
+                        </div>
+
+                      </div>
+
+                    </div>
+                  )}
+
+                  {/* SUB SECTION: GUIDE (自学与配置指南) */}
+                  {adminTab === 'guide' && (
+                    <div className="space-y-6 bg-white p-6 rounded-2xl border border-zinc-200 shadow-xs" id="help-guide-panel">
+                      <div className="flex items-center space-x-2 pb-3 border-b border-zinc-200">
+                        <BookOpen className="h-5 w-5 text-blue-600" />
+                        <h3 className="text-base font-bold text-zinc-800">全网CMS及影剧资源的初学配置与采集指南</h3>
+                      </div>
+
+                      <div className="space-y-4 text-xs text-zinc-700 leading-relaxed font-sans">
+                        <p>
+                          极简影院（Cineflow CMS）采用了云端的 <b>服务器级网关跨域代理技术</b>。因为大部门采集网站的JSON数据流与视频M3U8直链在浏览器中运行会引发 “跨域拒绝 (CORS Blocked)” 或 “混合内容不安全 (Mixed Content ID)” 的报错。本软件通过服务端底层重新转发并重构报文头域，让你流畅播放。
+                        </p>
+
+                        <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2.5">
+                          <span className="font-bold text-blue-800 text-[13px] block">💡 常见的开源优质免费采集源 (支持JSON)</span>
+                          <p className="text-zinc-650">
+                            你可以将以下采集网关直接复制并填入 <b>【自定义配置】</b> 或 <b>【CMS采集网关设置】</b> 字段中进行测试提取：
+                          </p>
+                          <ul className="list-disc pl-5 space-y-1.5 text-zinc-700 font-mono text-[11px]">
+                            <li><b>苹果资源:</b> https://api.pgzyapi.com/api.php/provide/vod/at/json</li>
+                            <li><b>闪播资源:</b> https://api.sbzyapi.com/api.php/provide/vod/at/json</li>
+                            <li><b>红牛资源:</b> https://www.hongniuapi.com/api.php/provide/vod/at/json</li>
+                            <li><b>天空资源:</b> https://m3u8.tiankongapi.com/api.php/provide/vod/at/json</li>
+                          </ul>
+                        </div>
+
+                        <div className="space-y-3 pt-2">
+                          <span className="font-bold text-zinc-800 text-[13px] block">❓ 为什么有的视频无法通过 “内置播放器” 播放？</span>
+                          <p>
+                            <b>1. 物理连接超时:</b> 对方资源站点可能断开链接、或者其独属的视频CDN正处于负载状态中。<br />
+                            <b>2. 防抖防盗链安全验证:</b> 一些非标准采集站点使用了复杂的动态安全令牌，拒绝浏览器底层提取流。<br />
+                            <b>3. 跨域拦截:</b> 这时候，你可以<b>灵活地通过左侧 or 下方的“播放解析/内核”下拉菜单</b>。将其切换为外部的 <b>【全能高清解析】</b>，系统将利用外部无广嵌套网关在iframe中自动安全解析播放该影视。
+                          </p>
+                        </div>
+
+                        <div className="pt-4 border-t border-zinc-100 flex items-center justify-between text-zinc-400 text-[11px]">
+                          <span>系统架构: 纯TS极致流畅 full-stack</span>
+                          <span>极简影院开发实验版</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                </div>
+              )}
+            </div>
+          )}
+
+        </section>
+      </main>
+
+      {/* FOOTER METADATA STATUS BAR */}
+      <footer className="h-10 bg-white border-t border-zinc-200 px-4 sm:px-10 flex items-center justify-between text-[11px] text-zinc-400 shrink-0">
+        <div className="flex space-x-4">
+          <span className="hidden sm:inline">系统负载: <span className="text-emerald-600 font-sans font-bold">1.2%</span></span>
+          <span>CMS API Version: <span className="text-zinc-600 font-mono font-bold">v4.2.0</span></span>
+          <span className="hidden sm:inline">采集并发: 12ms</span>
+        </div>
+        <div className="flex items-center">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 mr-1.5 animate-pulse" />
+          <span>采集总线连接正常</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
