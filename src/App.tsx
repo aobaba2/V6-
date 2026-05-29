@@ -169,6 +169,17 @@ export default function App() {
   const getFeaturedCandidates = () => {
     let list = [...videos];
     
+    // Deduplicate items early by ID to prevent key conflicts is any CMS returns duplicates
+    const seenIds = new Set();
+    const uniqueList: VideoItem[] = [];
+    for (const item of list) {
+      if (item.id && !seenIds.has(item.id)) {
+        seenIds.add(item.id);
+        uniqueList.push(item);
+      }
+    }
+    list = uniqueList;
+    
     // Filter for movies if possible to honor the "电影" request
     const moviesOnly = list.filter(v => {
       const cat = (v.category || '').toLowerCase();
@@ -307,7 +318,16 @@ export default function App() {
       });
     }
 
-    return result;
+    // Deduplicate items by ID to guarantee unique React key mappings on render lists
+    const seen = new Set();
+    const uniqueResult: VideoItem[] = [];
+    for (const item of result) {
+      if (item.id && !seen.has(item.id)) {
+        seen.add(item.id);
+        uniqueResult.push(item);
+      }
+    }
+    return uniqueResult;
   };
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() => {
     return sessionStorage.getItem('isAdminLoggedIn') === 'true';
@@ -714,10 +734,19 @@ export default function App() {
             const data = JSON.parse(text);
             // Pull class categories if returned by CMS json API
             if (data.class && Array.isArray(data.class)) {
-              const formattedCats: CategoryItem[] = data.class.map((c: any) => ({
-                id: c.type_id ?? c.id,
-                name: c.type_name ?? c.name
-              }));
+              const seenCats = new Set();
+              const formattedCats: CategoryItem[] = [];
+              for (const c of data.class) {
+                const catId = String(c.type_id ?? c.id ?? '');
+                const catName = c.type_name ?? c.name ?? '';
+                if (catId && catName && !seenCats.has(catId)) {
+                  seenCats.add(catId);
+                  formattedCats.push({
+                    id: catId,
+                    name: catName
+                  });
+                }
+              }
               setCategories(formattedCats);
               return;
             }
