@@ -47,8 +47,10 @@ export default function VideoPlayer({
       hlsRef.current = null;
     }
 
-    // Check if URL is standard m3u8
-    const isM3U8 = playUrl.toLowerCase().includes('.m3u8') || playUrl.toLowerCase().includes('.mp4');
+    // Proxy HTTP streams automatically to circumvent browser Mixed Content security sandboxes and CORS logs
+    const playableUrl = playUrl.startsWith('http://') 
+      ? `/api/stream-proxy?url=${encodeURIComponent(playUrl)}`
+      : playUrl;
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -58,7 +60,7 @@ export default function VideoPlayer({
       });
       hlsRef.current = hls;
 
-      hls.loadSource(playUrl);
+      hls.loadSource(playableUrl);
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -88,7 +90,7 @@ export default function VideoPlayer({
       });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native Apple HLS (Safari/iOS) fallback
-      video.src = playUrl;
+      video.src = playableUrl;
       video.addEventListener('loadedmetadata', () => {
         setIsReady(true);
         video.play().catch(() => {});

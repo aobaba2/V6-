@@ -32,13 +32,15 @@ import {
   LogOut,
   Heart,
   Share2,
-  Star
+  Star,
+  Radio
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CMSSource, M3U8Parser, ScrapingRules, AppSettings, VideoItem, CategoryItem, CMSResponse, WatchHistoryItem } from './types';
+import { CMSSource, M3U8Parser, ScrapingRules, AppSettings, VideoItem, CategoryItem, CMSResponse, WatchHistoryItem, IptvChannel } from './types';
 import VideoPlayer from './components/VideoPlayer';
 import VideoCard from './components/VideoCard';
 import SearchAndFilter from './components/SearchAndFilter';
+import IptvLiveView from './components/IptvLiveView';
 
 // Deterministic Emby-style review rating generator based on string hash
 const getRating = (name: string): string => {
@@ -91,8 +93,75 @@ export default function App() {
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<'home' | 'admin'>('home');
-  const [navTab, setNavTab] = useState<'home' | 'tv' | 'movies' | 'new' | 'mylist'>('home');
-  const [adminTab, setAdminTab] = useState<'config' | 'guide'>('config');
+  const [navTab, setNavTab] = useState<'home' | 'tv' | 'movies' | 'new' | 'mylist' | 'iptv'>('home');
+  const [adminTab, setAdminTab] = useState<'config' | 'guide' | 'iptv'>('config');
+
+  // IPTV Live Stream State
+  const [selectedIptvChannel, setSelectedIptvChannel] = useState<IptvChannel | null>(null);
+  const [iptvGroupFilter, setIptvGroupFilter] = useState<string>('all');
+  const [tempIptvName, setTempIptvName] = useState('');
+  const [tempIptvUrl, setTempIptvUrl] = useState('');
+  const [tempIptvGroup, setTempIptvGroup] = useState('');
+  const [tempIptvLogo, setTempIptvLogo] = useState('');
+  const [tempM3uUrl, setTempM3uUrl] = useState('');
+  const [isImportingM3u, setIsImportingM3u] = useState(false);
+  const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null);
+  const [isResettingIptv, setIsResettingIptv] = useState<boolean>(false);
+  const [m3uImportTab, setM3uImportTab] = useState<'url' | 'local'>('url');
+  const [tempM3uText, setTempM3uText] = useState('');
+
+  const parseM3uTextContent = (text: string): IptvChannel[] => {
+    const lines = text.split(/\r?\n/);
+    const channels: IptvChannel[] = [];
+    let currentChannel: any = null;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      if (line.startsWith('#EXTINF:')) {
+        currentChannel = {
+          name: '',
+          url: '',
+          group: '地方频道',
+          logo: undefined,
+          status: 'active'
+        };
+
+        const groupMatch = line.match(/group-title=["']([^"']+)["']/i);
+        if (groupMatch) {
+          currentChannel.group = groupMatch[1];
+        }
+
+        const logoMatch = line.match(/tvg-logo=["']([^"']+)["']/i);
+        if (logoMatch) {
+          currentChannel.logo = logoMatch[1];
+        }
+
+        const tvgNameMatch = line.match(/tvg-name=["']([^"']+)["']/i);
+        if (tvgNameMatch) {
+          currentChannel.name = tvgNameMatch[1];
+        }
+
+        const commaIndex = line.lastIndexOf(',');
+        if (commaIndex !== -1) {
+          const rawName = line.substring(commaIndex + 1).trim();
+          if (rawName) {
+            currentChannel.name = rawName;
+          }
+        }
+      } else if (!line.startsWith('#') && currentChannel) {
+        currentChannel.url = line;
+        currentChannel.id = 'iptv_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+        
+        if (currentChannel.name && currentChannel.url) {
+          channels.push(currentChannel as IptvChannel);
+        }
+        currentChannel = null;
+      }
+    }
+    return channels;
+  };
 
   const [activeHeroIndex, setActiveHeroIndex] = useState<number>(0);
 
@@ -191,6 +260,14 @@ export default function App() {
     }, 7000); // Rotate every 7 seconds
     return () => clearInterval(interval);
   }, [videos]);
+
+  // Handle default IPTV channel selection
+  useEffect(() => {
+    if (settings.iptvSources && settings.iptvSources.length > 0 && !selectedIptvChannel) {
+      const activeCh = settings.iptvSources.find(c => c.status === 'active') || settings.iptvSources[0];
+      setSelectedIptvChannel(activeCh);
+    }
+  }, [settings.iptvSources, selectedIptvChannel]);
 
   // Handle boundary check on videos change
   useEffect(() => {
@@ -1124,6 +1201,13 @@ export default function App() {
               My List
             </button>
             <button
+              onClick={() => { setActiveTab('home'); setNavTab('iptv'); }}
+              className={`hover:text-red-500 transition-all cursor-pointer text-[13px] flex items-center space-x-1 ${activeTab === 'home' && navTab === 'iptv' ? 'text-red-500 font-bold' : ''}`}
+            >
+              <Radio className="h-3.5 w-3.5 animate-pulse text-red-500" />
+              <span>电视直播</span>
+            </button>
+            <button
               onClick={() => { setActiveTab('admin'); }}
               className={`hover:text-red-500 transition-colors flex items-center space-x-1 cursor-pointer text-[13px] ${activeTab === 'admin' ? 'text-white font-bold' : ''}`}
             >
@@ -1212,6 +1296,13 @@ export default function App() {
           My List
         </button>
         <button
+          onClick={() => { setActiveTab('home'); setNavTab('iptv'); }}
+          className={`px-3 py-1 flex items-center space-x-0.5 cursor-pointer transition ${activeTab === 'home' && navTab === 'iptv' ? 'text-red-500 font-extrabold' : ''}`}
+        >
+          <Radio className="h-3 w-3 animate-pulse text-red-500" />
+          <span>直播</span>
+        </button>
+        <button
           onClick={() => { setActiveTab('admin'); }}
           className={`px-3 py-1 flex items-center space-x-0.5 cursor-pointer transition ${activeTab === 'admin' ? 'text-red-500 font-extrabold' : ''}`}
         >
@@ -1227,7 +1318,7 @@ export default function App() {
         <section className="flex-1 p-4 sm:p-7 overflow-y-auto bg-zinc-950" id="main-content-flow">
           
           {/* TAB 1: VIDEOS AND MAIN THEME HOME */}
-          {activeTab === 'home' && (
+          {activeTab === 'home' && navTab !== 'iptv' && (
             <div className="space-y-6">
               
                {/* HERO SHOWCASE SPOTLIGHT BANNER (resembles STARFALL banner from photo) */}
@@ -1985,6 +2076,14 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'home' && navTab === 'iptv' && (
+            <IptvLiveView
+              iptvSources={settings.iptvSources || []}
+              selectedChannel={selectedIptvChannel}
+              onSelectChannel={(ch) => setSelectedIptvChannel(ch)}
+            />
+          )}
+
           {/* TAB 2: ADMIN BACKOFFICE */}
           {activeTab === 'admin' && (
             <div className="space-y-6">
@@ -2091,6 +2190,17 @@ export default function App() {
                       >
                         <BookOpen className="h-3.5 w-3.5" />
                         <span>系统自学与配置指南</span>
+                      </button>
+                      <button
+                        onClick={() => setAdminTab('iptv')}
+                        className={`px-4 py-2 text-xs font-bold rounded-xl border transition flex items-center space-x-1.5 cursor-pointer ${
+                          adminTab === 'iptv'
+                            ? 'bg-red-650 text-white border-red-650 shadow-md'
+                            : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-350 hover:text-white'
+                        }`}
+                      >
+                        <Radio className="h-3.5 w-3.5" />
+                        <span>IPTV频道直播网关</span>
                       </button>
                     </div>
 
@@ -2552,6 +2662,450 @@ export default function App() {
                           <span>极简影院开发实验版</span>
                         </div>
                       </div>
+                    </div>
+                  )}
+
+                  {adminTab === 'iptv' && (
+                    <div className="space-y-6" id="iptv-admin-panel">
+                      
+                      <div className="flex items-center space-x-3 pb-2 border-b border-zinc-200">
+                        <span className="p-2 bg-red-50 text-red-650 rounded-lg">
+                          <Radio className="h-5 w-5 animate-pulse" />
+                        </span>
+                        <div>
+                          <h3 className="text-base font-bold text-zinc-800">IPTV 高清电视直播网关控制中心</h3>
+                          <p className="text-xs text-zinc-400">在此自由配置、新增、废除或检测前端播放器显示的 m3u8 高清电视直播频道。（修改保存后所有访客即时可见）</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-left">
+                        
+                        {/* LEFT COLUMN: Add Channel & M3U Import forms */}
+                        <div className="lg:col-span-1 space-y-6">
+                          
+                          {/* Part 1: Add individual channel */}
+                          <div className="bg-white rounded-2xl border border-zinc-200 p-5 space-y-4 shadow-xs">
+                            <div className="flex items-center justify-between border-b border-zinc-150 pb-3">
+                              <h4 className="text-sm font-bold text-zinc-800">➕ 新增高清电视频道</h4>
+                              <span className="text-[10px] bg-red-50 text-red-600 px-1.5 py-0.5 rounded font-mono font-bold tracking-wide">M3U8直播源</span>
+                            </div>
+
+                            <div className="space-y-3">
+                              <div className="space-y-1">
+                                <label className="text-[10px] text-zinc-500 font-bold block">频道名称 (例如: 湖南卫视HD)</label>
+                                <input
+                                  type="text"
+                                  value={tempIptvName || ''}
+                                  onChange={(e) => setTempIptvName(e.target.value)}
+                                  placeholder="输入电视台名称..."
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-red-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] text-zinc-500 font-bold block">直播视频流 URL (.m3u8 协议)</label>
+                                <input
+                                  type="text"
+                                  value={tempIptvUrl || ''}
+                                  onChange={(e) => setTempIptvUrl(e.target.value)}
+                                  placeholder="https://.../index.m3u8"
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-red-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] text-zinc-500 font-bold block">频道分类分组 (例如: CCTV 频道, 地方卫视)</label>
+                                <input
+                                  type="text"
+                                  value={tempIptvGroup || ''}
+                                  onChange={(e) => setTempIptvGroup(e.target.value)}
+                                  placeholder="输入组名称, 留空默认为 地方卫视"
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-red-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400"
+                                />
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[10px] text-zinc-500 font-bold block">频道徽章/Logo 图标 URL (可选)</label>
+                                <input
+                                  type="text"
+                                  value={tempIptvLogo || ''}
+                                  onChange={(e) => setTempIptvLogo(e.target.value)}
+                                  placeholder="http://.../logo.png"
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-red-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400"
+                                />
+                              </div>
+
+                              <button
+                                onClick={() => {
+                                  if (!tempIptvName || !tempIptvUrl) {
+                                    showToast('请输入完整的电视频道名称及M3U8直播源地址', 'error');
+                                    return;
+                                  }
+                                  if (!tempIptvUrl.startsWith('http://') && !tempIptvUrl.startsWith('https://')) {
+                                    showToast('M3U8直播流地址必须以 http:// 或 https:// 开头', 'error');
+                                    return;
+                                  }
+                                  const newCh: IptvChannel = {
+                                    id: 'iptv_' + Date.now(),
+                                    name: tempIptvName.trim(),
+                                    url: tempIptvUrl.trim(),
+                                    group: tempIptvGroup.trim() || '地方卫视',
+                                    logo: tempIptvLogo.trim() || undefined,
+                                    status: 'active'
+                                  };
+                                  const updated = [...(settings.iptvSources || []), newCh];
+                                  saveAllSettingsToServer({ ...settings, iptvSources: updated });
+                                  showToast(`新增频道 【${tempIptvName}】 成功，已保存至后台。`, 'success');
+                                  setTempIptvName('');
+                                  setTempIptvUrl('');
+                                  setTempIptvGroup('');
+                                  setTempIptvLogo('');
+                                }}
+                                className="w-full bg-red-650 hover:bg-red-700 text-white font-bold text-xs py-2.5 rounded-lg transition duration-205 flex items-center justify-center space-x-1 shadow-md cursor-pointer mt-3 border-none"
+                              >
+                                <span>确认并添加此电视频道</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Part 2: M3U bulk playlist import */}
+                          <div className="bg-white rounded-2xl border border-zinc-200 p-5 space-y-4 shadow-xs">
+                            <div className="flex items-center justify-between border-b border-zinc-150 pb-2.5">
+                              <h4 className="text-sm font-bold text-zinc-800">🔗 批量导入 M3U 电视列表</h4>
+                              <span className="text-[10px] bg-red-50 text-red-650 px-1.5 py-0.5 rounded font-mono font-bold tracking-wide">M3U自动解析</span>
+                            </div>
+
+                            {/* Custom Tab Selector */}
+                            <div className="flex border-b border-zinc-100 text-[11px] font-bold">
+                              <button
+                                onClick={() => setM3uImportTab('url')}
+                                className={`flex-1 pb-2 border-b-2 transition ${
+                                  m3uImportTab === 'url'
+                                    ? 'border-red-650 text-red-650'
+                                    : 'border-transparent text-zinc-400 hover:text-zinc-650'
+                                } bg-transparent cursor-pointer font-sans`}
+                              >
+                                🌐 线上 URL 导入
+                              </button>
+                              <button
+                                onClick={() => setM3uImportTab('local')}
+                                className={`flex-1 pb-2 border-b-2 transition ${
+                                  m3uImportTab === 'local'
+                                    ? 'border-red-650 text-red-650'
+                                    : 'border-transparent text-zinc-400 hover:text-zinc-650'
+                                } bg-transparent cursor-pointer font-sans`}
+                              >
+                                💻 本地文件/纯文本导入
+                              </button>
+                            </div>
+
+                            {m3uImportTab === 'url' ? (
+                              <>
+                                <p className="text-[11px] text-zinc-500 leading-relaxed font-sans text-left">
+                                  输入标准公网 M3U 播放清单 URL。系统将通过云端代理抓取并智能注入视频列表中。<strong>注意：</strong>如果您使用的是局局通、家庭内网等受限直播源，请点击上方切换至<b>“本地文件/纯文本导入”</b>，即可完美脱离网络屏障！
+                                </p>
+
+                                <div className="space-y-3 pt-1">
+                                  <div className="space-y-1 text-left">
+                                    <label className="text-[10px] text-zinc-500 font-bold block">M3U 电视清单 URL 地址</label>
+                                    <input
+                                      type="text"
+                                      value={tempM3uUrl}
+                                      onChange={(e) => setTempM3uUrl(e.target.value)}
+                                      placeholder="http://121.139.182.40:5000/iptv"
+                                      className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-red-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400"
+                                    />
+                                  </div>
+
+                                  <button
+                                    onClick={async () => {
+                                      if (!tempM3uUrl.trim()) {
+                                        showToast('请输入有效的 M3U 清单 URL 链接格式', 'error');
+                                        return;
+                                      }
+                                      if (!tempM3uUrl.startsWith('http://') && !tempM3uUrl.startsWith('https://')) {
+                                        showToast('链接必须以 http:// 或 https:// 开头', 'error');
+                                        return;
+                                      }
+
+                                      setIsImportingM3u(true);
+                                      showToast('正在为您加载并解析公网 M3U 直播源网络数据，请稍候...', 'info');
+
+                                      try {
+                                        const res = await fetch(`/api/parse-m3u?url=${encodeURIComponent(tempM3uUrl.trim())}`);
+                                        const json = await res.json();
+                                        
+                                        if (json.success && Array.isArray(json.channels)) {
+                                          if (json.channels.length === 0) {
+                                            showToast('获取成功，但未解析出有效的电视频道，请重试或检查该 M3U 的文本格式！', 'error');
+                                          } else {
+                                            const currentSources = settings.iptvSources || [];
+                                            const updated = [...currentSources, ...json.channels];
+                                            
+                                            await saveAllSettingsToServer({ ...settings, iptvSources: updated });
+                                            showToast(`大功告成！已经成功为您吞噬并批量录入了 ${json.channels.length} 个高清电视直播频道！`, 'success');
+                                            setTempM3uUrl('');
+                                          }
+                                        } else {
+                                          showToast(json.error || '解析线上 M3U 清单失败，请检查目标服务器是否宕机或格式不符。', 'error');
+                                        }
+                                      } catch (e: any) {
+                                        showToast(`批量拉取失败: ${e.message}`, 'error');
+                                      } finally {
+                                        setIsImportingM3u(false);
+                                      }
+                                    }}
+                                    disabled={isImportingM3u}
+                                    className={`w-full text-white font-bold text-xs py-2.5 rounded-lg transition duration-205 flex items-center justify-center space-x-1.5 shadow-md cursor-pointer border-none ${
+                                      isImportingM3u 
+                                        ? 'bg-zinc-350 cursor-not-allowed opacity-80' 
+                                        : 'bg-zinc-850 hover:bg-zinc-900'
+                                    }`}
+                                  >
+                                    {isImportingM3u ? (
+                                      <>
+                                        <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent" />
+                                        <span>深度拉取并解析中...</span>
+                                      </>
+                                    ) : (
+                                      <span>🚀 一键拉取并自动解析批量导入</span>
+                                    )}
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <p className="text-[11px] text-zinc-500 leading-relaxed font-sans text-left">
+                                  <strong>本地端安全解析：</strong> 绕过所有云端安全沙箱限制与代理拦截！适合从本地路由器（如 121.139.148.40 等内网 IP）配置的私有广播列表或者国内家庭内网 IPTV 组播节目表。
+                                </p>
+
+                                <div className="space-y-3 pt-1">
+                                  {/* Drag and drop section */}
+                                  <div className="border-2 border-dashed border-zinc-200 rounded-xl p-3 text-center hover:bg-zinc-50 transition relative">
+                                    <input
+                                      type="file"
+                                      accept=".m3u,.txt,.m3u8"
+                                      onChange={(e) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file) return;
+
+                                        const reader = new FileReader();
+                                        reader.onload = async (evt) => {
+                                          const text = evt.target?.result as string;
+                                          if (!text) return;
+
+                                          const parsedChannels = parseM3uTextContent(text);
+                                          if (parsedChannels.length === 0) {
+                                            showToast('无法解析该文件：未检测到任何包含 #EXTINF 清细信息的直播线路！', 'error');
+                                            return;
+                                          }
+
+                                          const currentSources = settings.iptvSources || [];
+                                          const updated = [...currentSources, ...parsedChannels];
+                                          await saveAllSettingsToServer({ ...settings, iptvSources: updated });
+                                          showToast(`导入成功！已秒级装填并合并了您本机的 ${parsedChannels.length} 个高清电视直播频道。`, 'success');
+                                        };
+                                        reader.readAsText(file);
+                                      }}
+                                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                    />
+                                    <div className="text-xs text-zinc-700 font-bold">📤 点击在此选择本地 M3U / TXT 文件</div>
+                                    <div className="text-[9px] text-zinc-400 mt-1">支持拖拉或点击直接载入进行浏览器无底噪深度解析</div>
+                                  </div>
+
+                                  {/* Direct manual paste section */}
+                                  <div className="space-y-1 text-left">
+                                    <div className="flex items-center justify-between">
+                                      <label className="text-[10px] text-zinc-500 font-bold block">或直接在此粘贴 .M3U 纯文本内容</label>
+                                      {tempM3uText && (
+                                        <button 
+                                          onClick={() => setTempM3uText('')}
+                                          className="text-[9px] text-red-500 hover:underline cursor-pointer border-none bg-transparent"
+                                        >
+                                          清空
+                                        </button>
+                                      )}
+                                    </div>
+                                    <textarea
+                                      rows={4}
+                                      value={tempM3uText}
+                                      onChange={(e) => setTempM3uText(e.target.value)}
+                                      placeholder={`#EXTM3U\n#EXTINF:-1 tvg-name="湖南卫视" group-title="卫视频道",湖南卫视\nhttp://121.139.148.40:5000/live/hunan.m3u8`}
+                                      className="w-full bg-white border border-zinc-200 text-[10px] font-mono rounded-md p-2 focus:ring-1 focus:ring-red-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400 leading-normal"
+                                    />
+                                  </div>
+
+                                  <button
+                                    onClick={async () => {
+                                      if (!tempM3uText.trim()) {
+                                        showToast('请在文本框内粘贴带有 #EXTINF 的 M3U 电视清单！', 'error');
+                                        return;
+                                      }
+
+                                      const parsedChannels = parseM3uTextContent(tempM3uText);
+                                      if (parsedChannels.length === 0) {
+                                        showToast('解析失败：未检验到任何有效的频道规则。请核对是否具有 EXTINF 与 URL 连接格式！', 'error');
+                                        return;
+                                      }
+
+                                      const currentSources = settings.iptvSources || [];
+                                      const updated = [...currentSources, ...parsedChannels];
+                                      await saveAllSettingsToServer({ ...settings, iptvSources: updated });
+                                      showToast(`一键解析合并大成功！已为您额外装载了 ${parsedChannels.length} 条直播线路。`, 'success');
+                                      setTempM3uText('');
+                                    }}
+                                    className="w-full text-white font-bold text-xs py-2 bg-red-650 hover:bg-red-750 rounded-lg transition duration-205 flex items-center justify-center space-x-1 shadow-md cursor-pointer border-none"
+                                  >
+                                    <span>⚡ 立即粘贴一键本地解析合并</span>
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+
+                        </div>
+
+                        {/* RIGHT GRID: Current channels lists management */}
+                        <div className="lg:col-span-2 bg-white rounded-2xl border border-zinc-200 p-5 space-y-4 shadow-xs flex flex-col">
+                          <div className="flex items-center justify-between border-b border-zinc-150 pb-3">
+                            <h4 className="text-sm font-bold text-zinc-800 flex items-center gap-1.5">
+                              <span>当前直播线路频道一览 ({ (settings.iptvSources || []).length } 个)</span>
+                            </h4>
+                            {isResettingIptv ? (
+                              <div className="flex items-center space-x-2">
+                                <span className="text-[10px] text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded">确定清空所有自定义并恢复默认？</span>
+                                <button
+                                  onClick={() => {
+                                    const DEFAULT_IPTV_FALLBACK: IptvChannel[] = [
+                                      { id: 'cgtn_news', name: 'CGTN 国际新闻台', url: 'https://live.cgtn.com/1000/prog_index.m3u8', group: 'CGTN 频道', logo: 'https://images.unsplash.com/photo-1585829365295-ab7cd400c167?w=128&auto=format&fit=crop&q=80', status: 'active' },
+                                      { id: 'cgtn_doc', name: 'CGTN 纪录片频道', url: 'https://live.cgtn.com/1002/prog_index.m3u8', group: 'CGTN 频道', logo: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=128&auto=format&fit=crop&q=80', status: 'active' },
+                                      { id: 'cgtn_es', name: 'CGTN 西班牙语频道', url: 'https://live.cgtn.com/1003/prog_index.m3u8', group: 'CGTN 频道', logo: 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=128&auto=format&fit=crop&q=80', status: 'active' },
+                                      { id: 'cgtn_fr', name: 'CGTN 法语台', url: 'https://live.cgtn.com/1004/prog_index.m3u8', group: 'CGTN 频道', logo: 'https://images.unsplash.com/photo-1513151233558-d860c5398176?w=128&auto=format&fit=crop&q=80', status: 'active' },
+                                      { id: 'cgtn_ar', name: 'CGTN 阿拉伯语台', url: 'https://live.cgtn.com/1005/prog_index.m3u8', group: 'CGTN 频道', logo: 'https://images.unsplash.com/photo-1528605248644-14dd04022da1?w=128&auto=format&fit=crop&q=80', status: 'active' },
+                                      { id: 'cgtn_ru', name: 'CGTN 俄语频道', url: 'https://live.cgtn.com/1006/prog_index.m3u8', group: 'CGTN 频道', logo: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=128&auto=format&fit=crop&q=80', status: 'active' },
+                                      { id: 'cctv1', name: 'CCTV-1 综合频道', url: 'https://v-local.hnntv.cn/live/cctv1.m3u8', group: 'CCTV 频道', logo: 'https://images.unsplash.com/photo-1626814026160-2237a95fc5a0?w=128&auto=format&fit=crop&q=80', status: 'active' },
+                                      { id: 'cctv13', name: 'CCTV-13 新闻频道', url: 'https://v-local.hnntv.cn/live/cctv13.m3u8', group: 'CCTV 频道', logo: 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=128&auto=format&fit=crop&q=80', status: 'active' }
+                                    ];
+                                    saveAllSettingsToServer({ ...settings, iptvSources: DEFAULT_IPTV_FALLBACK });
+                                    showToast('已成功重置为 CCTV & CGTN 经典官方直播源组合！', 'info');
+                                    setIsResettingIptv(false);
+                                  }}
+                                  className="px-2 py-1 rounded text-[10px] bg-red-650 hover:bg-red-750 text-white cursor-pointer border-none font-bold"
+                                >
+                                  确认重置
+                                </button>
+                                <button
+                                  onClick={() => setIsResettingIptv(false)}
+                                  className="px-2 py-1 rounded text-[10px] bg-zinc-100 hover:bg-zinc-200 text-zinc-650 cursor-pointer border-none"
+                                >
+                                  取消
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setIsResettingIptv(true)}
+                                className="text-[11px] font-sans font-bold text-red-650 hover:text-red-750 hover:underline flex items-center gap-1 cursor-pointer border-none bg-transparent"
+                              >
+                                <RotateCcw className="h-3 w-3 animate-spin duration-3000" />
+                                <span>重置默认电视播单</span>
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="overflow-x-auto border border-zinc-200 rounded-xl max-h-[460px] overflow-y-auto">
+                            <table className="w-full text-left text-xs divide-y divide-zinc-200">
+                              <thead className="bg-[#fafafa] sticky top-0 z-10">
+                                <tr>
+                                  <th className="p-3 font-semibold text-zinc-650">电视频道名</th>
+                                  <th className="p-3 font-semibold text-zinc-650">所属分组分类</th>
+                                  <th className="p-3 font-semibold text-zinc-650">状态</th>
+                                  <th className="p-3 font-semibold text-zinc-650 text-center">操作</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-zinc-200 bg-white">
+                                {(settings.iptvSources || []).map((ch) => (
+                                  <tr key={ch.id} className="hover:bg-zinc-50 transition-colors">
+                                    <td className="p-3 truncate max-w-[150px]">
+                                      <div className="font-bold text-zinc-800">{ch.name}</div>
+                                      <div className="text-[10px] text-zinc-450 font-mono mt-0.5 truncate select-all">{ch.url}</div>
+                                    </td>
+                                    <td className="p-3 text-zinc-600">
+                                      <span className="bg-zinc-100 px-2 py-0.5 rounded text-[10px] font-sans">{ch.group || '常规频道'}</span>
+                                    </td>
+                                    <td className="p-3">
+                                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                        ch.status === 'active'
+                                          ? 'bg-green-50 text-green-700 border border-green-200'
+                                          : 'bg-zinc-100 text-zinc-400'
+                                      }`}>
+                                        {ch.status === 'active' ? '正常开放' : '已禁用'}
+                                      </span>
+                                    </td>
+                                    <td className="p-3 text-center">
+                                      <div className="flex items-center justify-center space-x-2">
+                                        <button
+                                          onClick={() => {
+                                            const updated = (settings.iptvSources || []).map(c => 
+                                              c.id === ch.id ? { ...c, status: (c.status === 'active' ? 'inactive' : 'active') as any } : c
+                                            );
+                                            saveAllSettingsToServer({ ...settings, iptvSources: updated });
+                                            showToast(`已成功修改 ${ch.name} 的开放状态！`, 'success');
+                                          }}
+                                          className={`px-2.5 py-1 text-[10px] rounded hover:shadow-xs transition cursor-pointer border-none ${
+                                            ch.status === 'active'
+                                              ? 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
+                                              : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold'
+                                          }`}
+                                        >
+                                          {ch.status === 'active' ? '禁用' : '激活'}
+                                        </button>
+                                        {deletingChannelId === ch.id ? (
+                                          <div className="flex items-center space-x-1.5 justify-center">
+                                            <button
+                                              onClick={() => {
+                                                const updated = (settings.iptvSources || []).filter(c => c.id !== ch.id);
+                                                saveAllSettingsToServer({ ...settings, iptvSources: updated });
+                                                showToast(`电视频道 ${ch.name} 已成功移出数据库！`, 'success');
+                                                setDeletingChannelId(null);
+                                              }}
+                                              className="bg-red-600 hover:bg-red-700 text-white px-2.5 py-1 text-[10px] rounded font-bold transition hover:shadow-xs cursor-pointer border-none"
+                                            >
+                                              确定
+                                            </button>
+                                            <button
+                                              onClick={() => setDeletingChannelId(null)}
+                                              className="bg-zinc-150 hover:bg-zinc-200 text-zinc-700 px-2.5 py-1 text-[10px] rounded transition hover:shadow-xs cursor-pointer border-none"
+                                            >
+                                              取消
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            onClick={() => setDeletingChannelId(ch.id)}
+                                            className="bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1 text-[10px] rounded transition hover:shadow-xs cursor-pointer border-none"
+                                          >
+                                            删除
+                                          </button>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                                {(settings.iptvSources || []).length === 0 && (
+                                  <tr>
+                                    <td colSpan={4} className="p-6 text-center text-zinc-400 font-sans">
+                                      暂无任何配置的 IPTV 电视频道流。
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+
+                        </div>
+
+                      </div>
+
                     </div>
                   )}
 

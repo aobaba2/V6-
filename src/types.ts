@@ -26,12 +26,22 @@ export interface ScrapingRules {
   splitPlayNameAndUrl: string; // e.g., '$'
 }
 
+export interface IptvChannel {
+  id: string;
+  name: string;
+  url: string;
+  group?: string;
+  logo?: string;
+  status: 'active' | 'inactive';
+}
+
 export interface AppSettings {
   cmsSources: CMSSource[];
   m3u8Parsers: M3U8Parser[];
   rules: ScrapingRules;
   selectedCmsId: string;
   selectedParserId: string; // Can be 'internal' or references an ID
+  iptvSources?: IptvChannel[];
 }
 
 export interface VideoItem {
