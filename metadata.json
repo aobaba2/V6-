@@ -1,5 +1,5 @@
 {
-  "name": "极简影院",
+  "name": "赛博影院",
   "description": "一个简洁多功能自学实用的多接口影视采集与在线播放系统。支持CMS JSON接口配置、M3u8播放解析与采集规则自定义，完美适配移动端。",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

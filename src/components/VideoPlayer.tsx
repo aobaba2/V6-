@@ -29,7 +29,7 @@ export default function VideoPlayer({
 
   // Determine whether to use external parser (Iframe) or internal Hls.js player
   const useParser = parser !== null && parser.id !== 'internal';
-  const parserUrl = useParser ? `${parser!.url}${encodeURIComponent(playUrl)}` : '';
+  const parserUrl = useParser ? `${parser!.url}${encodeURIComponent(playUrl)}` : undefined;
 
   useEffect(() => {
     // Reset state when url changes
@@ -151,7 +151,6 @@ export default function VideoPlayer({
               controls
               playsInline
               preload="auto"
-              poster=""
             />
             {!isReady && !errorMsg && (
               <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center space-y-3 pointer-events-none transition-opacity duration-300">

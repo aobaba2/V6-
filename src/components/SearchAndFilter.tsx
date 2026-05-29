@@ -72,8 +72,8 @@ export default function SearchAndFilter({
           <span className="text-xs font-semibold uppercase tracking-wider">影片分类</span>
         </div>
         
-        {/* Horizontal scrollable tags container */}
-        <div className="flex items-center space-x-2 overflow-x-auto pb-1.5 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+        {/* Flexible wrapped tags container showing all categories on page */}
+        <div className="flex flex-wrap items-center gap-2" id="categories-grid-container">
           <button
             id="cat-badge-all"
             onClick={() => onSelectCategory('')}
