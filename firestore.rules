@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Default safety net to deny all accesses
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Validate application configuration settings
+    function isValidSettings(data) {
+      return data.keys().hasAll(['cmsSources', 'm3u8Parsers', 'rules', 'selectedCmsId', 'selectedParserId']) &&
+             data.keys().size() == 5 &&
+             data.selectedCmsId is string &&
+             data.selectedCmsId.size() <= 128 &&
+             data.selectedParserId is string &&
+             data.selectedParserId.size() <= 128 &&
+             data.cmsSources is list &&
+             data.cmsSources.size() <= 100 &&
+             data.m3u8Parsers is list &&
+             data.m3u8Parsers.size() <= 100;
+    }
+
+    match /settings/{settingsId} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if isValidSettings(request.resource.data);
+      allow delete: if false;
+    }
+  }
+}

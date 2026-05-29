@@ -36,6 +36,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CMSSource, M3U8Parser, ScrapingRules, AppSettings, VideoItem, CategoryItem, CMSResponse, WatchHistoryItem } from './types';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db, handleFirestoreError, OperationType } from './firebase';
 import VideoPlayer from './components/VideoPlayer';
 import VideoCard from './components/VideoCard';
 import SearchAndFilter from './components/SearchAndFilter';
@@ -350,10 +352,40 @@ export default function App() {
           }
         }
 
-        const res = await fetch('/api/settings');
-        if (res.ok) {
-          const serverData = (await res.json()) as AppSettings;
-          
+        let serverData: AppSettings | null = null;
+        const settingsDocRef = doc(db, 'settings', 'global_config');
+        try {
+          const docSnap = await getDoc(settingsDocRef);
+          if (docSnap.exists()) {
+            serverData = docSnap.data() as AppSettings;
+          }
+        } catch (dbErr: any) {
+          if (dbErr.code === 'permission-denied') {
+            handleFirestoreError(dbErr, OperationType.GET, 'settings/global_config');
+          } else {
+            console.warn('Failed to fetch from Firestore, falling back to local Express server API...', dbErr);
+          }
+        }
+
+        // Fallback to Express backend if Firestore is empty or not yet provisioned with configuration
+        if (!serverData) {
+          try {
+            const res = await fetch('/api/settings');
+            if (res.ok) {
+              serverData = (await res.json()) as AppSettings;
+              // Sync back to Firestore so it is populated
+              try {
+                await setDoc(settingsDocRef, serverData);
+              } catch (dbSetErr: any) {
+                console.warn('Silent populating Firestore failed:', dbSetErr);
+              }
+            }
+          } catch (apiErr) {
+            console.warn('Failed fallback from api too', apiErr);
+          }
+        }
+
+        if (serverData) {
           if (localSettings) {
             // Merge server configurations with local configuration to preserve custom resources user added
             const mergedCmsSources = [...serverData.cmsSources];
@@ -397,26 +429,31 @@ export default function App() {
             setSettings(mergedSettings);
             setRules(mergedSettings.rules);
 
-            // Sync back to local storage and server
+            // Sync back to local storage and server/Firestore
             localStorage.setItem('appSettings', JSON.stringify(mergedSettings));
+            try {
+              await setDoc(settingsDocRef, mergedSettings);
+            } catch (dbSyncErr: any) {
+              console.warn('Silent Firebase update sync failed', dbSyncErr);
+            }
             fetch('/api/settings', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(mergedSettings)
-            }).catch(err => console.warn('Failed silent server sync', err));
+            }).catch(err => console.warn('Failed silent local server sync', err));
           } else {
             setSettings(serverData);
             setRules(serverData.rules);
             localStorage.setItem('appSettings', JSON.stringify(serverData));
           }
-          showToast('已加载影视采集与解析配置', 'info');
+          showToast('已由云端(Firebase)完美加载影视配置', 'info');
         } else {
           if (localSettings) {
             setSettings(localSettings);
             setRules(localSettings.rules);
             showToast('无法读取云端配置，已应用本地缓存设定', 'info');
           } else {
-            showToast('无法从服务器加载配置，已应用系统默认设定', 'error');
+            showToast('无法加载云端或本地配置，已应用系统默认设定', 'error');
           }
         }
       } catch (err: any) {
@@ -593,17 +630,23 @@ export default function App() {
     // Write immediately to localStorage for robust offline/cycle resilience
     localStorage.setItem('appSettings', JSON.stringify(newSettings));
     try {
-      const res = await fetch('/api/settings', {
+      // 1. Persist directly to Firebase Firestore for serverless multi-worker environments
+      const settingsDocRef = doc(db, 'settings', 'global_config');
+      try {
+        await setDoc(settingsDocRef, newSettings);
+      } catch (dbErr: any) {
+        handleFirestoreError(dbErr, OperationType.WRITE, 'settings/global_config');
+      }
+
+      // 2. Silently update local Express file storage for developer environment completeness
+      fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSettings)
-      });
-      if (res.ok) {
-        setSettings(newSettings);
-        showToast('设置保存成功且生效！', 'success');
-      } else {
-        showToast('无法同步设置到云端', 'error');
-      }
+      }).catch(err => console.warn('Failed silent server sync', err));
+
+      setSettings(newSettings);
+      showToast('设置保存成功且同步至云端(Firebase)！', 'success');
     } catch (err: any) {
       showToast(`保存失败: ${err.message}`, 'error');
     }
