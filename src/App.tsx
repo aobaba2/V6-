@@ -36,8 +36,6 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CMSSource, M3U8Parser, ScrapingRules, AppSettings, VideoItem, CategoryItem, CMSResponse, WatchHistoryItem } from './types';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from './firebase';
 import VideoPlayer from './components/VideoPlayer';
 import VideoCard from './components/VideoCard';
 import SearchAndFilter from './components/SearchAndFilter';
@@ -352,40 +350,10 @@ export default function App() {
           }
         }
 
-        let serverData: AppSettings | null = null;
-        const settingsDocRef = doc(db, 'settings', 'global_config');
-        try {
-          const docSnap = await getDoc(settingsDocRef);
-          if (docSnap.exists()) {
-            serverData = docSnap.data() as AppSettings;
-          }
-        } catch (dbErr: any) {
-          if (dbErr.code === 'permission-denied') {
-            handleFirestoreError(dbErr, OperationType.GET, 'settings/global_config');
-          } else {
-            console.warn('Failed to fetch from Firestore, falling back to local Express server API...', dbErr);
-          }
-        }
-
-        // Fallback to Express backend if Firestore is empty or not yet provisioned with configuration
-        if (!serverData) {
-          try {
-            const res = await fetch('/api/settings');
-            if (res.ok) {
-              serverData = (await res.json()) as AppSettings;
-              // Sync back to Firestore so it is populated
-              try {
-                await setDoc(settingsDocRef, serverData);
-              } catch (dbSetErr: any) {
-                console.warn('Silent populating Firestore failed:', dbSetErr);
-              }
-            }
-          } catch (apiErr) {
-            console.warn('Failed fallback from api too', apiErr);
-          }
-        }
-
-        if (serverData) {
+        const res = await fetch('/api/settings');
+        if (res.ok) {
+          const serverData = (await res.json()) as AppSettings;
+          
           if (localSettings) {
             // Merge server configurations with local configuration to preserve custom resources user added
             const mergedCmsSources = [...serverData.cmsSources];
@@ -429,31 +397,26 @@ export default function App() {
             setSettings(mergedSettings);
             setRules(mergedSettings.rules);
 
-            // Sync back to local storage and server/Firestore
+            // Sync back to local storage and server
             localStorage.setItem('appSettings', JSON.stringify(mergedSettings));
-            try {
-              await setDoc(settingsDocRef, mergedSettings);
-            } catch (dbSyncErr: any) {
-              console.warn('Silent Firebase update sync failed', dbSyncErr);
-            }
             fetch('/api/settings', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(mergedSettings)
-            }).catch(err => console.warn('Failed silent local server sync', err));
+            }).catch(err => console.warn('Failed silent server sync', err));
           } else {
             setSettings(serverData);
             setRules(serverData.rules);
             localStorage.setItem('appSettings', JSON.stringify(serverData));
           }
-          showToast('已由云端(Firebase)完美加载影视配置', 'info');
+          showToast('已加载影视采集与解析配置', 'info');
         } else {
           if (localSettings) {
             setSettings(localSettings);
             setRules(localSettings.rules);
             showToast('无法读取云端配置，已应用本地缓存设定', 'info');
           } else {
-            showToast('无法加载云端或本地配置，已应用系统默认设定', 'error');
+            showToast('无法从服务器加载配置，已应用系统默认设定', 'error');
           }
         }
       } catch (err: any) {
@@ -630,23 +593,17 @@ export default function App() {
     // Write immediately to localStorage for robust offline/cycle resilience
     localStorage.setItem('appSettings', JSON.stringify(newSettings));
     try {
-      // 1. Persist directly to Firebase Firestore for serverless multi-worker environments
-      const settingsDocRef = doc(db, 'settings', 'global_config');
-      try {
-        await setDoc(settingsDocRef, newSettings);
-      } catch (dbErr: any) {
-        handleFirestoreError(dbErr, OperationType.WRITE, 'settings/global_config');
-      }
-
-      // 2. Silently update local Express file storage for developer environment completeness
-      fetch('/api/settings', {
+      const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSettings)
-      }).catch(err => console.warn('Failed silent server sync', err));
-
-      setSettings(newSettings);
-      showToast('设置保存成功且同步至云端(Firebase)！', 'success');
+      });
+      if (res.ok) {
+        setSettings(newSettings);
+        showToast('设置保存成功且生效！', 'success');
+      } else {
+        showToast('无法同步设置到云端', 'error');
+      }
     } catch (err: any) {
       showToast(`保存失败: ${err.message}`, 'error');
     }
@@ -1812,7 +1769,7 @@ export default function App() {
                                   value={tempCmsName}
                                   onChange={(e) => setTempCmsName(e.target.value)}
                                   placeholder="资源站简称..."
-                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-805 placeholder-zinc-400"
                                 />
                               </div>
                               <div className="space-y-1">
@@ -1823,7 +1780,7 @@ export default function App() {
                                   value={tempCmsUrl}
                                   onChange={(e) => setTempCmsUrl(e.target.value)}
                                   placeholder="https://api.domain.com/provide/vod/at/json"
-                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-805 placeholder-zinc-400"
                                 />
                               </div>
                             </div>
@@ -1928,7 +1885,7 @@ export default function App() {
                           <div className="bg-emerald-50/60 p-4 rounded-xl border border-emerald-100/80 space-y-2.5">
                             <div className="flex items-center space-x-1.5 pb-1 border-b border-emerald-100">
                               <SlidersHorizontal className="h-3.5 w-3.5 text-emerald-700" />
-                              <span className="text-xs font-bold text-emerald-850">当前生效的播放内核 / 解析引擎选择</span>
+                              <span className="text-xs font-bold text-emerald-900">当前生效的播放内核 / 解析引擎选择</span>
                             </div>
 
                             <div className="space-y-1.5">
@@ -1941,12 +1898,12 @@ export default function App() {
                                   saveAllSettingsToServer(nextSettings);
                                   showToast(`播放内核已成功设定为: ${val === 'internal' ? '内置极速解码器' : '自定义网页解析器'}`);
                                 }}
-                                className="w-full bg-white border border-emerald-200 rounded-lg py-1.5 px-3 text-xs font-semibold text-zinc-805 focus:outline-hidden focus:border-emerald-500"
+                                className="w-full bg-white border border-emerald-200 rounded-lg py-1.5 px-3 text-xs font-semibold text-zinc-800 focus:outline-hidden focus:border-emerald-500"
                                 id="aside-parser-dropdown"
                               >
-                                <option value="internal">✨ HlsJS 本地极速无广告流播放器 (默认推荐)</option>
+                                <option value="internal" className="text-zinc-800">✨ HlsJS 本地极速无广告流播放器 (默认推荐)</option>
                                 {settings.m3u8Parsers && settings.m3u8Parsers.map((p) => (
-                                  <option key={p.id} value={p.id}>
+                                  <option key={p.id} value={p.id} className="text-zinc-800">
                                     🔗 {p.name}
                                   </option>
                                 ))}
@@ -1969,7 +1926,7 @@ export default function App() {
                                   value={tempParserName}
                                   onChange={(e) => setTempParserName(e.target.value)}
                                   placeholder="极速解析..."
-                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-emerald-500 focus:outline-hidden"
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-emerald-500 focus:outline-hidden text-zinc-800 placeholder-zinc-400"
                                 />
                               </div>
                               <div className="space-y-1">
@@ -1980,7 +1937,7 @@ export default function App() {
                                   value={tempParserUrl}
                                   onChange={(e) => setTempParserUrl(e.target.value)}
                                   placeholder="https://jx.player.com/?url="
-                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-emerald-500 focus:outline-hidden"
+                                  className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-emerald-500 focus:outline-hidden text-zinc-800 placeholder-zinc-400"
                                 />
                               </div>
                             </div>
@@ -2049,7 +2006,7 @@ export default function App() {
                               type="text"
                               value={rules.titleKey}
                               onChange={(e) => setRules(prev => ({ ...prev, titleKey: e.target.value }))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-800"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -2059,7 +2016,7 @@ export default function App() {
                               type="text"
                               value={rules.picKey}
                               onChange={(e) => setRules(prev => ({ ...prev, picKey: e.target.value }))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-800"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -2069,7 +2026,7 @@ export default function App() {
                               type="text"
                               value={rules.categoryKey}
                               onChange={(e) => setRules(prev => ({ ...prev, categoryKey: e.target.value }))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-800"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -2079,7 +2036,7 @@ export default function App() {
                               type="text"
                               value={rules.playUrlKey}
                               onChange={(e) => setRules(prev => ({ ...prev, playUrlKey: e.target.value }))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-800"
                             />
                           </div>
                         </div>
@@ -2092,7 +2049,7 @@ export default function App() {
                               type="text"
                               value={rules.remarksKey}
                               onChange={(e) => setRules(prev => ({ ...prev, remarksKey: e.target.value }))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-800"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -2102,7 +2059,7 @@ export default function App() {
                               type="text"
                               value={rules.contentKey}
                               onChange={(e) => setRules(prev => ({ ...prev, contentKey: e.target.value }))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-800"
                             />
                           </div>
                           <div className="space-y-1.5">
@@ -2112,7 +2069,7 @@ export default function App() {
                               type="text"
                               value={rules.playFromServerKey}
                               onChange={(e) => setRules(prev => ({ ...prev, playFromServerKey: e.target.value }))}
-                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-505"
+                              className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-xs focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-800"
                             />
                           </div>
                         </div>
@@ -2128,7 +2085,7 @@ export default function App() {
                                 type="text"
                                 value={rules.splitPlayServer}
                                 onChange={(e) => setRules(prev => ({ ...prev, splitPlayServer: e.target.value }))}
-                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-zinc-800 focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
                               />
                             </div>
                             <div className="space-y-1">
@@ -2138,7 +2095,7 @@ export default function App() {
                                 type="text"
                                 value={rules.splitPlayEpisode}
                                 onChange={(e) => setRules(prev => ({ ...prev, splitPlayEpisode: e.target.value }))}
-                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-zinc-800 focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
                               />
                             </div>
                             <div className="space-y-1">
@@ -2148,7 +2105,7 @@ export default function App() {
                                 type="text"
                                 value={rules.splitPlayNameAndUrl}
                                 onChange={(e) => setRules(prev => ({ ...prev, splitPlayNameAndUrl: e.target.value }))}
-                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
+                                className="w-full bg-zinc-50 border border-zinc-200 rounded-lg p-2 font-mono text-zinc-800 focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
                               />
                             </div>
                           </div>
