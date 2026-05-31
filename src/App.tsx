@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   BookOpen,
   Sliders,
+  Pencil,
   HelpCircle,
   Menu,
   X,
@@ -400,6 +401,9 @@ export default function App() {
   // Settings modification fields state
   const [tempCmsName, setTempCmsName] = useState('');
   const [tempCmsUrl, setTempCmsUrl] = useState('');
+  const [editingCmsId, setEditingCmsId] = useState<string | null>(null);
+  const [editingCmsName, setEditingCmsName] = useState('');
+  const [editingCmsUrl, setEditingCmsUrl] = useState('');
   const [tempParserName, setTempParserName] = useState('');
   const [tempParserUrl, setTempParserUrl] = useState('');
   const [rules, setRules] = useState<ScrapingRules>({
@@ -1070,6 +1074,39 @@ export default function App() {
     };
     saveAllSettingsToServer(nextSettings);
     showToast('采集源已移除');
+  };
+
+  const handleSaveEditCms = (id: string) => {
+    if (!editingCmsName.trim() || !editingCmsUrl.trim()) {
+      showToast('请输入完整的资源站名称及JSON端点', 'error');
+      return;
+    }
+    if (!editingCmsUrl.trim().startsWith('http://') && !editingCmsUrl.trim().startsWith('https://')) {
+      showToast('API地址需以 http:// 或 https:// 开头', 'error');
+      return;
+    }
+
+    const updatedCmsSources = settings.cmsSources.map(s => {
+      if (s.id === id) {
+        return {
+          ...s,
+          name: editingCmsName.trim(),
+          url: editingCmsUrl.trim()
+        };
+      }
+      return s;
+    });
+
+    const nextSettings = {
+      ...settings,
+      cmsSources: updatedCmsSources
+    };
+
+    saveAllSettingsToServer(nextSettings);
+    setEditingCmsId(null);
+    setEditingCmsName('');
+    setEditingCmsUrl('');
+    showToast('采集源修改并保存成功！', 'success');
   };
 
   // Parser modifications
@@ -2433,63 +2470,40 @@ export default function App() {
                                     }
 
                                     setIsImportingTvBox(true);
-                                    showToast('正在拉取并解析 TVBox 订阅源，请稍候...', 'info');
-
+                                    showToast('正在拉取并解析 TVBox 订阅源...请稍后', 'info');
                                     try {
-                                      const res = await fetch(`/api/parse-tvbox?url=${encodeURIComponent(tempTvBoxUrl.trim())}`);
-                                      const json = await res.json();
-                                      
-                                      if (json.success && Array.isArray(json.sites)) {
-                                        if (json.sites.length === 0) {
-                                          showToast('获取成功，但未解析出有效的 Movie/API 影视口，请重试或检查该 TVBox 的 sites 字段！', 'error');
-                                        } else {
-                                          const currentSources = settings.cmsSources || [];
-                                          // Filter duplicates by url
-                                          const filteredNewSites = json.sites.filter(
-                                            (s: any) => !currentSources.some(exist => exist.url === s.url)
-                                          );
-
-                                          if (filteredNewSites.length === 0) {
-                                            showToast('这些影视源已经全部存在于您的采集总线中，无需重复录入。', 'info');
-                                          } else {
-                                            const updated = [...currentSources, ...filteredNewSites];
-                                            await saveAllSettingsToServer({ ...settings, cmsSources: updated });
-                                            showToast(`大功告成！已经为您成功批量录入了 ${filteredNewSites.length} 个 TVBox 高清源节点！`, 'success');
-                                            setTempTvBoxUrl('');
-                                          }
-                                        }
+                                      const res = await fetch(`/api/parse-tvbox?url=${encodeURIComponent(tempTvBoxUrl)}`);
+                                      const data = await res.json();
+                                      if (!res.ok || data.error) {
+                                        showToast(data.error || '解析失败，请检查链接或稍后重试', 'error');
                                       } else {
-                                        showToast(json.error || '解析 TVBox 订阅列表失败，请检查文件格式。', 'error');
+                                        const currentSources = settings.cmsSources || [];
+                                        const filteredNewSites = (data.sites || []).filter(
+                                          (s: any) => !currentSources.some(exist => exist.url === s.url)
+                                        );
+                                        if (filteredNewSites.length === 0) {
+                                          showToast('该订阅源中的影视源在前台配置中已全部存在，无需重复导入。', 'info');
+                                        } else {
+                                          const updated = [...currentSources, ...filteredNewSites];
+                                          await saveAllSettingsToServer({ ...settings, cmsSources: updated });
+                                          showToast(`导入成功！已自动解析并安装了 ${filteredNewSites.length} 个全新影视源！`, 'success');
+                                          setTempTvBoxUrl('');
+                                        }
                                       }
-                                    } catch (e: any) {
-                                      showToast(`批量拉取失败: ${e.message}`, 'error');
+                                    } catch (err: any) {
+                                      showToast(`拉取影视源异常：${err.message || err}`, 'error');
                                     } finally {
                                       setIsImportingTvBox(false);
                                     }
                                   }}
                                   disabled={isImportingTvBox}
-                                  className={`w-full text-white font-bold text-xs py-2 rounded-lg transition duration-205 flex items-center justify-center space-x-1.5 shadow-md cursor-pointer border-none ${
-                                    isImportingTvBox 
-                                      ? 'bg-zinc-350 cursor-not-allowed opacity-80' 
-                                      : 'bg-zinc-850 hover:bg-zinc-900'
-                                  }`}
+                                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 px-3 rounded-md transition disabled:opacity-50 cursor-pointer flex items-center justify-center space-x-1 border-none font-sans"
                                 >
-                                  {isImportingTvBox ? (
-                                    <>
-                                      <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent" />
-                                      <span>影视订阅源解析中...</span>
-                                    </>
-                                  ) : (
-                                    <span>🚀 一键云端拉取并智能合并影视源</span>
-                                  )}
+                                  {isImportingTvBox ? '正在解析中...' : '🔌 立即拉取并解析线上多源'}
                                 </button>
                               </div>
                             ) : (
                               <div className="space-y-2.5">
-                                <p className="text-[10px] text-zinc-450 leading-relaxed font-sans text-left">
-                                  <strong>本地端明文快速解析：</strong>适合因内网限制或无外网连接时直接解析 TVBox 明文 JSON。
-                                </p>
-
                                 {/* Drag and drop section */}
                                 <div className="border-2 border-dashed border-zinc-200 rounded-xl p-3 text-center relative hover:bg-zinc-100 transition duration-150">
                                   <input
@@ -2594,6 +2608,55 @@ export default function App() {
                             <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                               {settings.cmsSources && settings.cmsSources.map((source) => {
                                 const isSelected = settings.selectedCmsId === source.id;
+                                const isEditing = editingCmsId === source.id;
+
+                                if (isEditing) {
+                                  return (
+                                    <div
+                                      key={source.id}
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="flex flex-col gap-2.5 p-3 rounded-xl border border-blue-400 bg-white shadow-2xs"
+                                    >
+                                      <div className="flex flex-col gap-1.5 text-left">
+                                        <div>
+                                          <label className="text-[9px] text-zinc-500 font-bold block uppercase mb-0.5">采集源名称</label>
+                                          <input
+                                            type="text"
+                                            value={editingCmsName}
+                                            onChange={(e) => setEditingCmsName(e.target.value)}
+                                            className="w-full bg-white border border-zinc-200 text-xs rounded-md p-1.5 focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-900 font-sans font-medium"
+                                            placeholder="采集源简称..."
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="text-[9px] text-zinc-500 font-bold block uppercase mb-0.5">网关 API 端点 URL</label>
+                                          <input
+                                            type="text"
+                                            value={editingCmsUrl}
+                                            onChange={(e) => setEditingCmsUrl(e.target.value)}
+                                            className="w-full bg-white border border-zinc-200 text-xs rounded-md p-1.5 focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-900 font-mono"
+                                            placeholder="https://..."
+                                          />
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center justify-end space-x-1.5 pt-1 border-t border-zinc-100">
+                                        <button
+                                          onClick={() => setEditingCmsId(null)}
+                                          className="text-[10px] px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 text-zinc-650 border border-zinc-200 font-semibold cursor-pointer transition-colors"
+                                        >
+                                          取消
+                                        </button>
+                                        <button
+                                          onClick={() => handleSaveEditCms(source.id)}
+                                          className="text-[10px] px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white border-none font-semibold cursor-pointer transition-colors"
+                                        >
+                                          保存
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
                                 return (
                                   <div
                                     key={source.id}
@@ -2623,8 +2686,8 @@ export default function App() {
                                       </div>
                                       <span className="text-[9px] text-zinc-400 font-mono block truncate mt-1">地址: {source.url}</span>
                                     </div>
-                                    
-                                    <div className="flex items-center space-x-2" onClick={(e) => e.stopPropagation()}>
+
+                                    <div className="flex items-center space-x-1.5" onClick={(e) => e.stopPropagation()}>
                                       {!isSelected ? (
                                         <button
                                           onClick={() => {
@@ -2636,7 +2699,7 @@ export default function App() {
                                             setSearchKeyword('');
                                             showToast(`已成功切换当前主采集源: ${source.name}`);
                                           }}
-                                          className="text-[10px] px-2 py-1 rounded bg-white hover:bg-zinc-100 text-zinc-650 border border-zinc-300 shadow-2xs font-semibold hover:text-zinc-900 transition-colors"
+                                          className="text-[10px] px-2 py-1 rounded bg-white hover:bg-zinc-105 text-zinc-650 border border-zinc-300 shadow-2xs font-semibold hover:text-zinc-900 transition-colors cursor-pointer"
                                         >
                                           设为主源
                                         </button>
@@ -2646,6 +2709,20 @@ export default function App() {
                                           <span>激活中</span>
                                         </span>
                                       )}
+
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setEditingCmsId(source.id);
+                                          setEditingCmsName(source.name);
+                                          setEditingCmsUrl(source.url);
+                                        }}
+                                        className="p-1 rounded-md hover:bg-zinc-200 text-zinc-500 hover:text-zinc-700 transition"
+                                        title="编辑此采集源"
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                      </button>
+
                                       <button
                                         id={`del-cms-${source.id}`}
                                         onClick={(e) => {
