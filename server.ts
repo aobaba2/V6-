@@ -74,6 +74,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
   selectedCmsId: 'ffzy',
   selectedParserId: 'internal', // 'internal' represents using the browser's Hls.js player
+  fetchMode: 'proxy',
   iptvSources: [
     { id: 'cgtn_news', name: 'CGTN 国际新闻台', url: 'https://live.cgtn.com/1000/prog_index.m3u8', group: 'CGTN 频道', logo: 'https://images.unsplash.com/photo-1585829365295-ab7cd400c167?w=128&auto=format&fit=crop&q=80', status: 'active' },
     { id: 'cgtn_doc', name: 'CGTN 纪录片频道', url: 'https://live.cgtn.com/1002/prog_index.m3u8', group: 'CGTN 频道', logo: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=128&auto=format&fit=crop&q=80', status: 'active' },

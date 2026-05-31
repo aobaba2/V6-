@@ -33,7 +33,8 @@ import {
   Heart,
   Share2,
   Star,
-  Radio
+  Radio,
+  Globe
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CMSSource, M3U8Parser, ScrapingRules, AppSettings, VideoItem, CategoryItem, CMSResponse, WatchHistoryItem, IptvChannel } from './types';
@@ -79,7 +80,8 @@ export default function App() {
       splitPlayNameAndUrl: '$'
     },
     selectedCmsId: '',
-    selectedParserId: 'internal'
+    selectedParserId: 'internal',
+    fetchMode: 'proxy'
   });
 
   // UI state
@@ -680,7 +682,8 @@ export default function App() {
                 splitPlayNameAndUrl: '$'
               },
               selectedCmsId: 'ffzy',
-              selectedParserId: 'internal'
+              selectedParserId: 'internal',
+              fetchMode: 'proxy'
             };
             setSettings(BACKUP_DEFAULTS);
             setRules(BACKUP_DEFAULTS.rules);
@@ -722,11 +725,17 @@ export default function App() {
 
     async function fetchClasses() {
       try {
-        const proxyUrl = `/api/cms-proxy?url=${encodeURIComponent(activeCms!.url)}`;
-        let res = await fetch(proxyUrl).catch(() => null);
-        if (!res || res.status === 404 || res.status === 405) {
-          console.warn('Proxy route unavailable, falling back to direct CMS fetch...');
-          res = await fetch(activeCms!.url);
+        const useDirect = settings.fetchMode === 'direct';
+        let res;
+        if (useDirect) {
+          res = await fetch(activeCms!.url).catch(() => null);
+        } else {
+          const proxyUrl = `/api/cms-proxy?url=${encodeURIComponent(activeCms!.url)}`;
+          res = await fetch(proxyUrl).catch(() => null);
+          if (!res || res.status === 404 || res.status === 405 || !res.ok) {
+            console.warn('Proxy route unavailable or error, falling back to direct CMS fetch...');
+            res = await fetch(activeCms!.url).catch(() => null);
+          }
         }
         if (res && res.ok) {
           const text = await res.text();
@@ -789,24 +798,11 @@ export default function App() {
   ) => {
     setLoadingVideos(true);
     try {
-      let queryUrl = `/api/cms-proxy?url=${encodeURIComponent(cmsUrl)}&pg=${page}`;
-      
-      if (keyword) {
-        // With keywords, CMS sometimes ignores type filter
-        queryUrl += `&wd=${encodeURIComponent(keyword)}&ac=list`;
-      } else if (categoryId) {
-        queryUrl += `&t=${categoryId}&ac=videolist`;
-      } else {
-        queryUrl += `&ac=videolist`;
-      }
+      const useDirect = settings.fetchMode === 'direct';
+      let res;
+      let usedProxy = false;
 
-      if (forceRefresh) {
-        queryUrl += `&refresh=true`;
-      }
-
-      let res = await fetch(queryUrl).catch(() => null);
-      if (!res || res.status === 404 || res.status === 405) {
-        console.warn('Proxy route unavailable, falling back to direct CMS fetch...');
+      if (useDirect) {
         let directUrl = cmsUrl;
         const separator = directUrl.includes('?') ? '&' : '?';
         directUrl += `${separator}pg=${page}`;
@@ -818,8 +814,40 @@ export default function App() {
           directUrl += `&ac=videolist`;
         }
         res = await fetch(directUrl).catch((e) => {
-          throw new Error(`直接连接源站接口失败: ${e.message}。由于是在只读/静态无代理容器运行，浏览器可能会拒绝跨域(CORS)访问。建议配置支持CORS或采用带服务端的网关版本。`);
+          throw new Error(`直接连接源站接口失败: ${e.message}。由于目标接口不支持跨域访问(CORS)，浏览器安全策略已拦截请求。建议在浏览器安装【CORS Unblock】等跨域解锁扩展插件，或在右下角【系统设置】中选择开启【服务器中转代理】。`);
         });
+      } else {
+        usedProxy = true;
+        let queryUrl = `/api/cms-proxy?url=${encodeURIComponent(cmsUrl)}&pg=${page}`;
+        if (keyword) {
+          queryUrl += `&wd=${encodeURIComponent(keyword)}&ac=list`;
+        } else if (categoryId) {
+          queryUrl += `&t=${categoryId}&ac=videolist`;
+        } else {
+          queryUrl += `&ac=videolist`;
+        }
+        if (forceRefresh) {
+          queryUrl += `&refresh=true`;
+        }
+
+        res = await fetch(queryUrl).catch(() => null);
+        if (!res || res.status === 404 || res.status === 405 || !res.ok) {
+          console.warn(`Proxy route returned non-ok status ${res?.status || 'unknown'}, falling back to direct CMS fetch...`);
+          usedProxy = false;
+          let directUrl = cmsUrl;
+          const separator = directUrl.includes('?') ? '&' : '?';
+          directUrl += `${separator}pg=${page}`;
+          if (keyword) {
+            directUrl += `&wd=${encodeURIComponent(keyword)}&ac=list`;
+          } else if (categoryId) {
+            directUrl += `&t=${categoryId}&ac=videolist`;
+          } else {
+            directUrl += `&ac=videolist`;
+          }
+          res = await fetch(directUrl).catch((e) => {
+            throw new Error(`连接失败：云端中转代理服务连接超时或在这个托管服务商（如 Vercel）中受限，且直接连接源站亦宣告失败（${e.message}）。这通常是源站无 CORS 允许头导致的。建议安装网页【CORS Unblock】扩展插件，或在右下角【系统设置】切换到其他可用的采集源节点。`);
+          });
+        }
       }
 
       const text = await res.text().catch(() => '');
@@ -2646,6 +2674,69 @@ export default function App() {
                           </button>
                         </div>
 
+                      </div>
+
+                      {/* SECTION 4: NETWORK REQUEST METHOD & PROXY CONFIG */}
+                      <div className="bg-white rounded-2xl border border-zinc-200 p-6 space-y-4 shadow-xs">
+                        <div className="flex items-center space-x-2 border-b border-zinc-100 pb-3.5">
+                          <Globe className="h-4.5 w-4.5 text-indigo-600" />
+                          <div>
+                            <h4 className="text-sm font-bold text-zinc-800">4. 接口中继代理与网络请求模式</h4>
+                            <p className="text-xs text-zinc-400">选择获取CMS和影视列表资源的网络传输方式。当在 Vercel 等海外托管部署由于国内网络隔离导致获取数据超时出错时，首选快捷切换。</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div
+                            id="fetchmode-proxy-btn"
+                            onClick={() => {
+                              const nextSettings = { ...settings, fetchMode: 'proxy' as const };
+                              setSettings(nextSettings);
+                              saveAllSettingsToServer(nextSettings);
+                              showToast('网络请求模式已设定为：服务器中继代理', 'success');
+                            }}
+                            className={`p-4 rounded-xl border-2 cursor-pointer transition select-none flex items-start space-x-3 ${
+                              settings.fetchMode !== 'direct'
+                                ? 'bg-indigo-50/70 border-indigo-400 text-indigo-900'
+                                : 'bg-zinc-50 border-zinc-200 hover:bg-zinc-100 hover:border-zinc-300'
+                            }`}
+                          >
+                            <span className={`p-1.5 rounded-lg text-xs mt-0.5 ${settings.fetchMode !== 'direct' ? 'bg-indigo-200/80 text-indigo-800 font-bold' : 'bg-zinc-200 text-zinc-650'}`}>
+                              🌐
+                            </span>
+                            <div>
+                              <span className="font-bold text-xs block text-zinc-805">服务器中继代理模式 (云端中转 - 默认)</span>
+                              <span className="text-[11px] text-zinc-500 leading-relaxed block mt-1">
+                                所有的采集请求都经由云端 Node 后端服务器中转。<b>特点是可以在 HTTPS 网页下无缝运作且免装跨域插件</b>。但当托管服务器（如 Vercel）受到服务器 IP 或国内防火墙对海外阻断时，可能会提示接口延迟或超时。
+                              </span>
+                            </div>
+                          </div>
+
+                          <div
+                            id="fetchmode-direct-btn"
+                            onClick={() => {
+                              const nextSettings = { ...settings, fetchMode: 'direct' as const };
+                              setSettings(nextSettings);
+                              saveAllSettingsToServer(nextSettings);
+                              showToast('网络请求模式已设定为：浏览器极速直连', 'success');
+                            }}
+                            className={`p-4 rounded-xl border-2 cursor-pointer transition select-none flex items-start space-x-3 ${
+                              settings.fetchMode === 'direct'
+                                ? 'bg-indigo-50/70 border-indigo-400 text-indigo-900'
+                                : 'bg-zinc-50 border-zinc-200 hover:bg-zinc-100 hover:border-zinc-300'
+                            }`}
+                          >
+                            <span className={`p-1.5 rounded-lg text-xs mt-0.5 ${settings.fetchMode === 'direct' ? 'bg-indigo-200/80 text-indigo-800 font-bold' : 'bg-zinc-200 text-zinc-650'}`}>
+                              ⚡
+                            </span>
+                            <div>
+                              <span className="font-bold text-xs block text-zinc-805">浏览器极速直连模式 (CORS / 无中继)</span>
+                              <span className="text-[11px] text-zinc-500 leading-relaxed block mt-1">
+                                绕过云网络中继。由您的浏览器直接连接 CMS 采集源接口。<b>速度极快、不耗用服务端任何连接数与带宽，彻底规避 Vercel 等海外云端被墙的问题</b>。但由于绝大多数视频采集源均未开放跨域 CORS 允许头，<b>通常需要您在浏览器安装 【CORS Unblock】 跨域解锁扩展插件才可正常运作</b>。
+                              </span>
+                            </div>
+                          </div>
+                        </div>
                       </div>
 
                     </div>

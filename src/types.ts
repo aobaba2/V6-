@@ -42,6 +42,7 @@ export interface AppSettings {
   selectedCmsId: string;
   selectedParserId: string; // Can be 'internal' or references an ID
   iptvSources?: IptvChannel[];
+  fetchMode?: 'proxy' | 'direct';
 }
 
 export interface VideoItem {
