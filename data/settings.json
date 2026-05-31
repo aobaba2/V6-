@@ -1,0 +1,119 @@
+{
+  "cmsSources": [
+    {
+      "id": "wlzy",
+      "name": "卧龙资源 (高速M3U8)",
+      "url": "https://api.wlzyapi.com/api.php/provide/vod/at/json",
+      "status": "active"
+    },
+    {
+      "id": "cms_1780214809717",
+      "name": "光速资源",
+      "url": "https://api.guangsuapi.com/api.php/provide/vod/from/gsm3u8/",
+      "status": "active"
+    }
+  ],
+  "m3u8Parsers": [
+    {
+      "id": "xmflv",
+      "name": "全能高清解析 (网页嵌套)",
+      "url": "https://jx.xmflv.cc/?url=",
+      "type": "iframe",
+      "status": "active"
+    },
+    {
+      "id": "jsonplayer",
+      "name": "极速无广解析",
+      "url": "https://jx.jsonplayer.com/player/?url=",
+      "type": "iframe",
+      "status": "active"
+    },
+    {
+      "id": "aidouer",
+      "name": "虾米解析",
+      "url": "https://jx.aidouer.net/?url=",
+      "type": "iframe",
+      "status": "active"
+    }
+  ],
+  "rules": {
+    "titleKey": "vod_name",
+    "picKey": "vod_pic",
+    "categoryKey": "type_name",
+    "playUrlKey": "vod_play_url",
+    "remarksKey": "vod_remarks",
+    "contentKey": "vod_content",
+    "playFromServerKey": "vod_play_from",
+    "splitPlayServer": "$$$",
+    "splitPlayEpisode": "#",
+    "splitPlayNameAndUrl": "$"
+  },
+  "selectedCmsId": "cms_1780214809717",
+  "selectedParserId": "internal",
+  "iptvSources": [
+    {
+      "id": "cgtn_news",
+      "name": "CGTN 国际新闻台",
+      "url": "https://live.cgtn.com/1000/prog_index.m3u8",
+      "group": "CGTN 频道",
+      "logo": "https://images.unsplash.com/photo-1585829365295-ab7cd400c167?w=128&auto=format&fit=crop&q=80",
+      "status": "active"
+    },
+    {
+      "id": "cgtn_doc",
+      "name": "CGTN 纪录片频道",
+      "url": "https://live.cgtn.com/1002/prog_index.m3u8",
+      "group": "CGTN 频道",
+      "logo": "https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=128&auto=format&fit=crop&q=80",
+      "status": "active"
+    },
+    {
+      "id": "cgtn_es",
+      "name": "CGTN 西班牙语频道",
+      "url": "https://live.cgtn.com/1003/prog_index.m3u8",
+      "group": "CGTN 频道",
+      "logo": "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=128&auto=format&fit=crop&q=80",
+      "status": "active"
+    },
+    {
+      "id": "cgtn_fr",
+      "name": "CGTN 法语台",
+      "url": "https://live.cgtn.com/1004/prog_index.m3u8",
+      "group": "CGTN 频道",
+      "logo": "https://images.unsplash.com/photo-1513151233558-d860c5398176?w=128&auto=format&fit=crop&q=80",
+      "status": "active"
+    },
+    {
+      "id": "cgtn_ar",
+      "name": "CGTN 阿拉伯语台",
+      "url": "https://live.cgtn.com/1005/prog_index.m3u8",
+      "group": "CGTN 频道",
+      "logo": "https://images.unsplash.com/photo-1528605248644-14dd04022da1?w=128&auto=format&fit=crop&q=80",
+      "status": "active"
+    },
+    {
+      "id": "cgtn_ru",
+      "name": "CGTN 俄语频道",
+      "url": "https://live.cgtn.com/1006/prog_index.m3u8",
+      "group": "CGTN 频道",
+      "logo": "https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=128&auto=format&fit=crop&q=80",
+      "status": "active"
+    },
+    {
+      "id": "cctv1",
+      "name": "CCTV-1 综合频道",
+      "url": "https://v-local.hnntv.cn/live/cctv1.m3u8",
+      "group": "CCTV 频道",
+      "logo": "https://images.unsplash.com/photo-1626814026160-2237a95fc5a0?w=128&auto=format&fit=crop&q=80",
+      "status": "active"
+    },
+    {
+      "id": "cctv13",
+      "name": "CCTV-13 新闻频道",
+      "url": "https://v-local.hnntv.cn/live/cctv13.m3u8",
+      "group": "CCTV 频道",
+      "logo": "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=128&auto=format&fit=crop&q=80",
+      "status": "active"
+    }
+  ]
+}

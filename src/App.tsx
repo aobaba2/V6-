@@ -584,6 +584,21 @@ export default function App() {
         if (localSettingsStr) {
           try {
             localSettings = JSON.parse(localSettingsStr);
+            // Self-heating sanitation for legacy defunct domains
+            if (localSettings && Array.isArray(localSettings.cmsSources)) {
+              localSettings.cmsSources = localSettings.cmsSources.map(source => {
+                if (
+                  source.url.includes('wlzy.co') || 
+                  source.url.includes('collect.wlzy.co') || 
+                  source.url.includes('cj.wlzyapi.com') || 
+                  source.url.includes('wolongapi.com') || 
+                  source.url.includes('api.wolongapi.com')
+                ) {
+                  source.url = 'https://api.wlzyapi.com/api.php/provide/vod/at/json';
+                }
+                return source;
+              });
+            }
           } catch (e) {
             console.warn('Failed to parse local settings', e);
           }
@@ -662,7 +677,7 @@ export default function App() {
                 { id: 'bdzy', name: '极速影音 (百度秒播)', url: 'https://api.apibdzy.com/api.php/provide/vod/at/json', status: 'active' },
                 { id: 'hhzy', name: '豪华资源 (豪华极速)', url: 'https://hhzyapi.com/api.php/provide/vod/at/json', status: 'active' },
                 { id: 'bfzy', name: '暴风资源 (经典多源)', url: 'https://bfzyapi.com/api.php/provide/vod/at/json', status: 'active' },
-                { id: 'wlzy', name: '卧龙资源 (高速M3U8)', url: 'https://api.wolongapi.com/api.php/provide/vod/at/json', status: 'active' }
+                { id: 'wlzy', name: '卧龙资源 (高速M3U8)', url: 'https://api.wlzyapi.com/api.php/provide/vod/at/json', status: 'active' }
               ],
               m3u8Parsers: [
                 { id: 'xmflv', name: '全能高清解析 (网页嵌套)', url: 'https://jx.xmflv.cc/?url=', type: 'iframe', status: 'active' },
@@ -833,6 +848,16 @@ export default function App() {
         res = await fetch(queryUrl).catch(() => null);
         if (!res || res.status === 404 || res.status === 405 || !res.ok) {
           console.warn(`Proxy route returned non-ok status ${res?.status || 'unknown'}, falling back to direct CMS fetch...`);
+          
+          let proxyErrorMsg = '';
+          if (res && res.status !== 404 && res.status !== 405) {
+            try {
+              const text = await res.text().catch(() => '');
+              const errorJson = JSON.parse(text);
+              proxyErrorMsg = errorJson.error || '';
+            } catch {}
+          }
+
           usedProxy = false;
           let directUrl = cmsUrl;
           const separator = directUrl.includes('?') ? '&' : '?';
@@ -845,8 +870,15 @@ export default function App() {
             directUrl += `&ac=videolist`;
           }
           res = await fetch(directUrl).catch((e) => {
+            if (proxyErrorMsg) {
+              throw new Error(proxyErrorMsg);
+            }
             throw new Error(`连接失败：云端中转代理服务连接超时或在这个托管服务商（如 Vercel）中受限，且直接连接源站亦宣告失败（${e.message}）。这通常是源站无 CORS 允许头导致的。建议安装网页【CORS Unblock】扩展插件，或在右下角【系统设置】切换到其他可用的采集源节点。`);
           });
+
+          if (res && !res.ok && proxyErrorMsg) {
+            throw new Error(proxyErrorMsg);
+          }
         }
       }
 

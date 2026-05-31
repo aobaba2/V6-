@@ -33,7 +33,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     {
       id: 'wlzy',
       name: '卧龙资源 (高速M3U8)',
-      url: 'https://api.wolongapi.com/api.php/provide/vod/at/json',
+      url: 'https://api.wlzyapi.com/api.php/provide/vod/at/json',
       status: 'active'
     }
   ],
@@ -119,8 +119,14 @@ function getSettings(): AppSettings {
       // 2. Scan and replace any legacy dead domains in cmsSources
       if (Array.isArray(settings.cmsSources)) {
         settings.cmsSources = settings.cmsSources.map(source => {
-          if (source.url.includes('wlzy.co') || source.url.includes('collect.wlzy.co') || source.url.includes('cj.wlzyapi.com')) {
-            source.url = 'https://api.wolongapi.com/api.php/provide/vod/at/json';
+          if (
+            source.url.includes('wlzy.co') || 
+            source.url.includes('collect.wlzy.co') || 
+            source.url.includes('cj.wlzyapi.com') || 
+            source.url.includes('wolongapi.com') || 
+            source.url.includes('api.wolongapi.com')
+          ) {
+            source.url = 'https://api.wlzyapi.com/api.php/provide/vod/at/json';
             modified = true;
           }
           return source;
