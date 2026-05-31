@@ -274,11 +274,11 @@ app.get('/api/cms-proxy', async (req, res) => {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
         'Accept': 'application/json, text/plain, */*'
       },
-      signal: AbortSignal.timeout(10000) // 10 second timeout
+      signal: AbortSignal.timeout(4500) // Lowered to 4.5 seconds to comfortably fit inside Vercel's 10s execution budget
     });
 
     if (!response.ok) {
-       res.status(response.status).json({ error: `Received non-ok response ${response.status} from CMS` });
+       res.status(400).json({ error: `采集源站拒绝了云主页连接（状态码: ${response.status}）。可能是由于该站点的防火墙（WAF）拒绝了海外托管服务器 IP、或者防盗链规则触发。请在右下角【系统设置】中切换为其他采集源，或改用【浏览器极速直连模式】。` });
        return;
     }
 
@@ -287,7 +287,7 @@ app.get('/api/cms-proxy', async (req, res) => {
 
     // Check if response is actually JSON or maybe XML (some providers default to XML if not specified)
     if (textData.trim().startsWith('<')) {
-       res.status(422).json({ error: 'Endpoint returned XML. This site supports JSON API only.' });
+       res.status(400).json({ error: '采集源接口返回了网页/XML内容而非规范的 JSON。该站点可能已更换API或限制公开访问。建议切换其他采集源。' });
        return;
     }
 
@@ -311,11 +311,16 @@ app.get('/api/cms-proxy', async (req, res) => {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.json(jsonData);
     } catch {
-      res.status(500).json({ error: 'Failed to parse JSON response from the CMS provider.' });
+      res.status(400).json({ error: '解析采集源返回的 JSON 失败，可能接口已被临时拦截或混淆。' });
     }
   } catch (err: any) {
     console.error('[CMS Proxy Rule Error]', err);
-    res.status(500).json({ error: `Connection failed: ${err.message}` });
+    const isTimeout = err.name === 'TimeoutError' || err.message?.includes('timeout') || err.message?.includes('Timeout');
+    if (isTimeout) {
+      res.status(400).json({ error: '代理网关连接该采集源超时（4.5秒无响应）。中国大陆绝大多数免费采集接口部署在低配服务器上，且对海外云平台 IP（如 Vercel, AWS）存在严重的网络抖动或故意拔线屏蔽。建议您调出右下角【系统设置】，将网络请求模式切换至【浏览器极速直连模式】并在浏览器安装【CORS Unblock】跨域插件，即可满速直连，不再受制于云服务器！' });
+    } else {
+      res.status(400).json({ error: `代理网关连接错误: ${err.message}。建议到页面底部的【系统设置】中切换为其他采集源，或尝试使用【浏览器极速直连模式】搭配对应插件直连。` });
+    }
   }
 });
 
