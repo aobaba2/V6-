@@ -112,6 +112,55 @@ export default function App() {
   const [m3uImportTab, setM3uImportTab] = useState<'url' | 'local'>('url');
   const [tempM3uText, setTempM3uText] = useState('');
 
+  // TVBox Subscription Import State
+  const [tempTvBoxUrl, setTempTvBoxUrl] = useState('');
+  const [isImportingTvBox, setIsImportingTvBox] = useState(false);
+  const [tvBoxImportTab, setTvBoxImportTab] = useState<'url' | 'local'>('url');
+  const [tempTvBoxText, setTempTvBoxText] = useState('');
+
+  const parseTvBoxTextContent = (text: string): CMSSource[] => {
+    let clean = text.replace(/\/\*[\s\S]*?\*\//g, '');
+    const lines = clean.split('\n');
+    const resultLines = lines.map(line => {
+      let idx = line.indexOf('//');
+      while (idx !== -1) {
+        if (idx > 0 && line.charAt(idx - 1) === ':') {
+          idx = line.indexOf('//', idx + 2);
+        } else {
+          return line.substring(0, idx);
+        }
+      }
+      return line;
+    });
+    clean = resultLines.join('\n');
+    clean = clean.replace(/,(\s*[\]}])/g, '$1');
+
+    try {
+      const config = JSON.parse(clean);
+      if (!config || !Array.isArray(config.sites)) {
+        return [];
+      }
+      const cmsSources: CMSSource[] = [];
+      config.sites.forEach((site: any, idx: number) => {
+        if (site && site.name && site.api && typeof site.api === 'string') {
+          const urlStr = site.api.trim();
+          if (urlStr.startsWith('http://') || urlStr.startsWith('https://')) {
+            cmsSources.push({
+              id: `tvbox_client_${idx}_${Math.random().toString(36).substring(2, 7)}_${Date.now()}`,
+              name: `${site.name.trim()} (TVBox)`,
+              url: urlStr,
+              status: 'active'
+            });
+          }
+        }
+      });
+      return cmsSources;
+    } catch (e) {
+      console.warn('Failed client-side TVBox parse', e);
+      return [];
+    }
+  };
+
   const parseM3uTextContent = (text: string): IptvChannel[] => {
     const lines = text.split(/\r?\n/);
     const channels: IptvChannel[] = [];
@@ -1260,38 +1309,8 @@ export default function App() {
           {/* Desktop Navigation Tabs - exact replication of photo items */}
           <nav className="hidden md:flex space-x-5 text-sm font-semibold text-zinc-350">
             <button
-              onClick={() => { setActiveTab('home'); setNavTab('home'); setSelectedCategoryId(''); setSearchKeyword(''); }}
-              className={`hover:text-red-500 transition-colors cursor-pointer text-[13px] ${activeTab === 'home' && navTab === 'home' ? 'text-red-550 font-bold' : ''}`}
-            >
-              Home
-            </button>
-            <button
-              onClick={() => { setActiveTab('home'); setNavTab('tv'); }}
-              className={`hover:text-red-500 transition-colors cursor-pointer text-[13px] ${activeTab === 'home' && navTab === 'tv' ? 'text-white font-bold' : ''}`}
-            >
-              TV Shows
-            </button>
-            <button
-              onClick={() => { setActiveTab('home'); setNavTab('movies'); }}
-              className={`hover:text-red-500 transition-colors cursor-pointer text-[13px] ${activeTab === 'home' && navTab === 'movies' ? 'text-white font-bold' : ''}`}
-            >
-              Movies
-            </button>
-            <button
-              onClick={() => { setActiveTab('home'); setNavTab('new'); }}
-              className={`hover:text-red-500 transition-colors cursor-pointer text-[13px] ${activeTab === 'home' && navTab === 'new' ? 'text-white font-bold' : ''}`}
-            >
-              New & Popular
-            </button>
-            <button
-              onClick={() => { setActiveTab('home'); setNavTab('mylist'); }}
-              className={`hover:text-red-500 transition-colors cursor-pointer text-[13px] ${activeTab === 'home' && navTab === 'mylist' ? 'text-white font-bold' : ''}`}
-            >
-              My List
-            </button>
-            <button
               onClick={() => { setActiveTab('home'); setNavTab('iptv'); }}
-              className={`hover:text-red-500 transition-all cursor-pointer text-[13px] flex items-center space-x-1 ${activeTab === 'home' && navTab === 'iptv' ? 'text-red-500 font-bold' : ''}`}
+              className={`hover:text-red-500 transition-all cursor-pointer text-[13px] flex items-center space-x-1 ${activeTab === 'home' && navTab === 'iptv' ? 'text-red-550 font-bold' : ''}`}
             >
               <Radio className="h-3.5 w-3.5 animate-pulse text-red-500" />
               <span>电视直播</span>
@@ -1360,30 +1379,6 @@ export default function App() {
 
       {/* MOBILE HEADER BUTTONS */}
       <div className="md:hidden flex bg-[#0c0c0c] px-2 py-2.5 justify-around border-b border-zinc-900 text-xs font-medium text-zinc-400">
-        <button
-          onClick={() => { setActiveTab('home'); setNavTab('home'); }}
-          className={`px-3 py-1 cursor-pointer transition ${activeTab === 'home' && navTab === 'home' ? 'text-red-500 font-extrabold' : ''}`}
-        >
-          Home
-        </button>
-        <button
-          onClick={() => { setActiveTab('home'); setNavTab('tv'); }}
-          className={`px-3 py-1 cursor-pointer transition ${activeTab === 'home' && navTab === 'tv' ? 'text-red-500 font-extrabold' : ''}`}
-        >
-          TV Shows
-        </button>
-        <button
-          onClick={() => { setActiveTab('home'); setNavTab('movies'); }}
-          className={`px-3 py-1 cursor-pointer transition ${activeTab === 'home' && navTab === 'movies' ? 'text-red-500 font-extrabold' : ''}`}
-        >
-          Movies
-        </button>
-        <button
-          onClick={() => { setActiveTab('home'); setNavTab('mylist'); }}
-          className={`px-3 py-1 cursor-pointer transition ${activeTab === 'home' && navTab === 'mylist' ? 'text-red-500 font-extrabold' : ''}`}
-        >
-          My List
-        </button>
         <button
           onClick={() => { setActiveTab('home'); setNavTab('iptv'); }}
           className={`px-3 py-1 flex items-center space-x-0.5 cursor-pointer transition ${activeTab === 'home' && navTab === 'iptv' ? 'text-red-500 font-extrabold' : ''}`}
@@ -2373,6 +2368,224 @@ export default function App() {
                               <Plus className="h-3.5 w-3.5" />
                               <span>添加到多源采集总线</span>
                             </button>
+                          </div>
+
+                          {/* Part 1.5: TVBox Movie Subscription Bulk Import */}
+                          <div className="bg-zinc-50 p-4 rounded-xl border border-zinc-150 space-y-3">
+                            <div className="flex items-center justify-between border-b border-zinc-205 pb-2">
+                              <span className="text-xs font-semibold text-zinc-700 flex items-center space-x-1">
+                                <span>📺 批量导入 TVBox 影视订阅源</span>
+                              </span>
+                              <span className="text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-mono font-semibold">
+                                自动规则解析
+                              </span>
+                            </div>
+
+                            {/* Custom Tab Selector */}
+                            <div className="flex border-b border-zinc-200 text-[11px] font-bold">
+                              <button
+                                onClick={() => setTvBoxImportTab('url')}
+                                className={`flex-1 pb-1.5 border-b-2 transition ${
+                                  tvBoxImportTab === 'url'
+                                    ? 'border-blue-600 text-blue-600 font-extrabold'
+                                    : 'border-transparent text-zinc-400 hover:text-zinc-650'
+                                } bg-transparent cursor-pointer font-sans`}
+                              >
+                                🌐 线上 URL 导入
+                              </button>
+                              <button
+                                onClick={() => setTvBoxImportTab('local')}
+                                className={`flex-1 pb-1.5 border-b-2 transition ${
+                                  tvBoxImportTab === 'local'
+                                    ? 'border-blue-600 text-blue-600 font-extrabold'
+                                    : 'border-transparent text-zinc-400 hover:text-zinc-650'
+                                } bg-transparent cursor-pointer font-sans`}
+                              >
+                                💻 本地/纯文本导入
+                              </button>
+                            </div>
+
+                            {tvBoxImportTab === 'url' ? (
+                              <div className="space-y-2.5">
+                                <p className="text-[10px] text-zinc-450 leading-relaxed font-sans text-left">
+                                  输入标准的 TVBox 影视 JSON 订阅地址。云端自动中继获取其中的 sites 节点并转化为标准 CMS 采集源。
+                                </p>
+                                <div className="space-y-1 text-left">
+                                  <label className="text-[10px] text-zinc-500 font-bold block">TVBox 订阅源 URL 地址 (*.json / *.txt 等明文接口)</label>
+                                  <input
+                                    type="text"
+                                    value={tempTvBoxUrl}
+                                    onChange={(e) => setTempTvBoxUrl(e.target.value)}
+                                    placeholder="https://raw.githubusercontent.com/.../tvbox.json"
+                                    className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400"
+                                  />
+                                </div>
+
+                                <button
+                                  onClick={async () => {
+                                    if (!tempTvBoxUrl.trim()) {
+                                      showToast('请输入有效的 TVBox 订阅 URL 链接', 'error');
+                                      return;
+                                    }
+                                    if (!tempTvBoxUrl.startsWith('http://') && !tempTvBoxUrl.startsWith('https://')) {
+                                      showToast('链接必须以 http:// 或 https:// 开头', 'error');
+                                      return;
+                                    }
+
+                                    setIsImportingTvBox(true);
+                                    showToast('正在拉取并解析 TVBox 订阅源，请稍候...', 'info');
+
+                                    try {
+                                      const res = await fetch(`/api/parse-tvbox?url=${encodeURIComponent(tempTvBoxUrl.trim())}`);
+                                      const json = await res.json();
+                                      
+                                      if (json.success && Array.isArray(json.sites)) {
+                                        if (json.sites.length === 0) {
+                                          showToast('获取成功，但未解析出有效的 Movie/API 影视口，请重试或检查该 TVBox 的 sites 字段！', 'error');
+                                        } else {
+                                          const currentSources = settings.cmsSources || [];
+                                          // Filter duplicates by url
+                                          const filteredNewSites = json.sites.filter(
+                                            (s: any) => !currentSources.some(exist => exist.url === s.url)
+                                          );
+
+                                          if (filteredNewSites.length === 0) {
+                                            showToast('这些影视源已经全部存在于您的采集总线中，无需重复录入。', 'info');
+                                          } else {
+                                            const updated = [...currentSources, ...filteredNewSites];
+                                            await saveAllSettingsToServer({ ...settings, cmsSources: updated });
+                                            showToast(`大功告成！已经为您成功批量录入了 ${filteredNewSites.length} 个 TVBox 高清源节点！`, 'success');
+                                            setTempTvBoxUrl('');
+                                          }
+                                        }
+                                      } else {
+                                        showToast(json.error || '解析 TVBox 订阅列表失败，请检查文件格式。', 'error');
+                                      }
+                                    } catch (e: any) {
+                                      showToast(`批量拉取失败: ${e.message}`, 'error');
+                                    } finally {
+                                      setIsImportingTvBox(false);
+                                    }
+                                  }}
+                                  disabled={isImportingTvBox}
+                                  className={`w-full text-white font-bold text-xs py-2 rounded-lg transition duration-205 flex items-center justify-center space-x-1.5 shadow-md cursor-pointer border-none ${
+                                    isImportingTvBox 
+                                      ? 'bg-zinc-350 cursor-not-allowed opacity-80' 
+                                      : 'bg-zinc-850 hover:bg-zinc-900'
+                                  }`}
+                                >
+                                  {isImportingTvBox ? (
+                                    <>
+                                      <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent" />
+                                      <span>影视订阅源解析中...</span>
+                                    </>
+                                  ) : (
+                                    <span>🚀 一键云端拉取并智能合并影视源</span>
+                                  )}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="space-y-2.5">
+                                <p className="text-[10px] text-zinc-450 leading-relaxed font-sans text-left">
+                                  <strong>本地端明文快速解析：</strong>适合因内网限制或无外网连接时直接解析 TVBox 明文 JSON。
+                                </p>
+
+                                {/* Drag and drop section */}
+                                <div className="border-2 border-dashed border-zinc-200 rounded-xl p-3 text-center relative hover:bg-zinc-100 transition duration-150">
+                                  <input
+                                    type="file"
+                                    accept=".json,.txt"
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0];
+                                      if (!file) return;
+
+                                      const reader = new FileReader();
+                                      reader.onload = async (evt) => {
+                                        const text = evt.target?.result as string;
+                                        if (!text) return;
+
+                                        const parsedSources = parseTvBoxTextContent(text);
+                                        if (parsedSources.length === 0) {
+                                          showToast('无法解析该文件：未检测到任何包含 sites 且带有 api 的明文配置站点！', 'error');
+                                          return;
+                                        }
+
+                                        const currentSources = settings.cmsSources || [];
+                                        const filteredNewSites = parsedSources.filter(
+                                          (s: any) => !currentSources.some(exist => exist.url === s.url)
+                                        );
+
+                                        if (filteredNewSites.length === 0) {
+                                          showToast('文件中的影视源在前台配置中已全部存在，无需重复导入。', 'info');
+                                        } else {
+                                          const updated = [...currentSources, ...filteredNewSites];
+                                          await saveAllSettingsToServer({ ...settings, cmsSources: updated });
+                                          showToast(`导入成功！已秒级装填并合并了您本机的 ${filteredNewSites.length} 个影视采集网络源！`, 'success');
+                                        }
+                                      };
+                                      reader.readAsText(file);
+                                    }}
+                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                  />
+                                  <div className="text-xs text-zinc-700 font-bold">📤 选择本地 TVBox .json 配置文件</div>
+                                  <div className="text-[9px] text-zinc-400 mt-1">支持拖拽或选择，直接在浏览器中秒级免跨域安全解析</div>
+                                </div>
+
+                                {/* Direct manual paste section */}
+                                <div className="space-y-1 text-left">
+                                  <div className="flex items-center justify-between">
+                                    <label className="text-[10px] text-zinc-500 font-bold block">或直接粘贴 TVBox JSON 配置文本</label>
+                                    {tempTvBoxText && (
+                                      <button 
+                                        onClick={() => setTempTvBoxText('')}
+                                        className="text-[9px] text-red-500 hover:underline cursor-pointer border-none bg-transparent"
+                                      >
+                                        清空
+                                      </button>
+                                    )}
+                                  </div>
+                                  <textarea
+                                    rows={4}
+                                    value={tempTvBoxText}
+                                    onChange={(e) => setTempTvBoxText(e.target.value)}
+                                    placeholder={`{\n  "sites": [\n    { "name": "新视频源", "type": 1, "api": "http://.../json" }\n  ]\n}`}
+                                    className="w-full bg-white border border-zinc-200 text-[10px] font-mono rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400 leading-normal"
+                                  />
+                                </div>
+
+                                <button
+                                  onClick={async () => {
+                                    if (!tempTvBoxText.trim()) {
+                                      showToast('请在文本框内粘贴标准的 TVBox 影视 sites 配置配置！', 'error');
+                                      return;
+                                    }
+
+                                    const parsedSources = parseTvBoxTextContent(tempTvBoxText);
+                                    if (parsedSources.length === 0) {
+                                      showToast('解析失败：未在 JSON 配置中检验到 sites 站点数组或格式有误！', 'error');
+                                      return;
+                                    }
+
+                                    const currentSources = settings.cmsSources || [];
+                                    const filteredNewSites = parsedSources.filter(
+                                      (s: any) => !currentSources.some(exist => exist.url === s.url)
+                                    );
+
+                                    if (filteredNewSites.length === 0) {
+                                      showToast('该文本中的资源节点之前均已录入成功！', 'info');
+                                    } else {
+                                      const updated = [...currentSources, ...filteredNewSites];
+                                      await saveAllSettingsToServer({ ...settings, cmsSources: updated });
+                                      showToast(`解析并智能合并成功！已成功录入了 ${filteredNewSites.length} 个新影视采集站节点！`, 'success');
+                                      setTempTvBoxText('');
+                                    }
+                                  }}
+                                  className="w-full text-white font-bold text-xs py-2 bg-blue-600 hover:bg-blue-650 rounded-lg transition duration-205 flex items-center justify-center space-x-1 shadow-md cursor-pointer border-none"
+                                >
+                                  <span>⚡ 立即粘贴一键浏览器本地解析合并</span>
+                                </button>
+                              </div>
+                            )}
                           </div>
 
                           {/* Existing Source list */}
