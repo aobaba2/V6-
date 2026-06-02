@@ -18,6 +18,58 @@ const getRating = (name: string): string => {
   return score.toFixed(1);
 };
 
+// Helper to detect video quality from remarks and name
+const parseQuality = (remarks: string = '', name: string = '') => {
+  const text = (remarks + ' ' + name).toLowerCase();
+  
+  if (text.includes('4k') || text.includes('2160p') || text.includes('极清') || text.includes('uhd')) {
+    return {
+      label: '4K',
+      bgClass: 'bg-gradient-to-r from-amber-500 to-yellow-500 text-zinc-950 font-extrabold',
+    };
+  }
+  if (text.includes('蓝光') || text.includes('bd') || text.includes('bluray') || text.includes('blu-ray')) {
+    return {
+      label: '蓝光',
+      bgClass: 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-bold',
+    };
+  }
+  if (text.includes('高清') || text.includes('hd') || text.includes('1080p') || text.includes('720p') || text.includes('超清') || text.includes('1080i') || text.includes('hdtv')) {
+    let specificLabel = '高清';
+    if (text.includes('1080p')) {
+      specificLabel = '1080P';
+    } else if (text.includes('hd')) {
+      specificLabel = 'HD';
+    } else if (text.includes('超清')) {
+      specificLabel = '超清';
+    }
+    return {
+      label: specificLabel,
+      bgClass: 'bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-bold',
+    };
+  }
+  
+  // Custom fallback checks for other qualities if present
+  if (text.includes('dvd') || text.includes('dvdrip')) {
+    return {
+      label: 'DVD',
+      bgClass: 'bg-zinc-800 text-zinc-300 font-bold border border-zinc-750',
+    };
+  }
+  if (text.includes('ts') || text.includes('tc') || text.includes('hc') || text.includes('枪版') || text.includes('抢先')) {
+    return {
+      label: '抢先版',
+      bgClass: 'bg-rose-950 text-rose-300 border border-rose-900/40 font-bold',
+    };
+  }
+
+  // Elegant fallback
+  return {
+    label: 'HD',
+    bgClass: 'bg-gradient-to-r from-zinc-800 to-zinc-900 text-zinc-300 border border-zinc-700/30 font-medium',
+  };
+};
+
 export default function VideoCard({ video, onClick }: VideoCardProps) {
   const [imgError, setImgError] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -54,11 +106,16 @@ export default function VideoCard({ video, onClick }: VideoCardProps) {
         </div>
 
         {/* Quality status badges */}
-        <div className="absolute top-2.5 right-2.5 z-15 flex items-center gap-1">
-          <span className="text-[9px] font-bold font-mono tracking-wide bg-gradient-to-r from-amber-500/90 to-amber-600/90 text-zinc-950 px-1.5 py-0.5 rounded shadow-sm">
-            4K HDR
-          </span>
-        </div>
+        {(() => {
+          const q = parseQuality(video.remarks, video.name);
+          return (
+            <div className="absolute top-2.5 right-2.5 z-15 flex items-center gap-1">
+              <span className={`text-[9px] tracking-wide px-1.5 py-0.5 rounded shadow-sm ${q.bgClass}`}>
+                {q.label}
+              </span>
+            </div>
+          );
+        })()}
 
         {/* Remarks label */}
         {video.remarks && (

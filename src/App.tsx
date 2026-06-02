@@ -35,7 +35,9 @@ import {
   Share2,
   Star,
   Radio,
-  Globe
+  Globe,
+  Download,
+  Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CMSSource, M3U8Parser, ScrapingRules, AppSettings, VideoItem, CategoryItem, CMSResponse, WatchHistoryItem, IptvChannel } from './types';
@@ -43,6 +45,42 @@ import VideoPlayer from './components/VideoPlayer';
 import VideoCard from './components/VideoCard';
 import SearchAndFilter from './components/SearchAndFilter';
 import IptvLiveView from './components/IptvLiveView';
+
+interface TvBoxPreset {
+  name: string;
+  url: string;
+  desc: string;
+  category: '⚡ 热门推荐' | '🔄 饭系多线' | '💎 精品特制' | '🔋 其他备用';
+}
+
+const TVBOX_PRESETS: TvBoxPreset[] = [
+  { name: '饭太硬主力接口', url: 'http://www.饭太硬.com/tv', desc: '全能旗舰源，全网推荐首选网址', category: '⚡ 热门推荐' },
+  { name: '肥猫主力接口', url: 'http://肥猫.com', desc: '极速流畅，影视资源极全', category: '⚡ 热门推荐' },
+  { name: '毒盒金装源', url: 'https://毒盒.com/tv', desc: '站长极力推荐，精选高画质线', category: '⚡ 热门推荐' },
+  { name: '巧技影视源', url: 'http://cdn.qiaoji8.com/tvbox.json', desc: '高清高速，更新及时且稳定', category: '⚡ 热门推荐' },
+  { name: '菜妮丝XBPQ接口', url: 'https://tv.xn--yhqu5zs87a.top', desc: '精品纯净影视，多源聚合', category: '⚡ 热门推荐' },
+  
+  { name: '饭太硬备用1', url: 'http://www.饭太硬.net/tv', desc: '饭太硬网盘及备选多线接口', category: '🔄 饭系多线' },
+  { name: '饭太硬备用2', url: 'http://fty.xxooo.cf/tv', desc: '饭太硬主力分流镜像节点', category: '🔄 饭系多线' },
+  { name: '饭太硬备用3', url: 'http://fty.888484.xyz/tv', desc: '饭太硬高性能加速节点', category: '🔄 饭系多线' },
+  { name: '饭太硬备用4', url: 'http://fty.333232.xyz/tv', desc: '饭太硬备用服务器接口', category: '🔄 饭系多线' },
+  { name: '饭太硬郑州免代', url: 'https://gitee.com/xxoooo/fan/raw/master/in.bmp', desc: 'Gitee 全国免代理极速节点', category: '🔄 饭系多线' },
+
+  { name: '小盒子4K专线', url: 'http://xhztv.top/4k.json', desc: '主打超高清 4K 原生画质影视', category: '💎 精品特制' },
+  { name: '蓝天Luck央视台', url: 'https://gitee.com/lukei7/lib/raw/Luck/%E8%87%AA%E5%BB%BA.json', desc: '海量精品央视、卫视、地方直播源', category: '💎 精品特制' },
+  { name: '小米影视接口', url: 'http://www.mpanso.com/小米/DEMO.json', desc: '小米多平台网盘聚合与高速源', category: '💎 精品特制' },
+  { name: '南风境外代理源', url: 'https://gh.aptv.app/https://raw.githubusercontent.com/yoursmile66/TVBox/main/XC.json', desc: '通过 GitHub 代理安全拉取', category: '💎 精品特制' },
+
+  { name: '及时雨接口', url: 'https://d.kstore.dev/download/12441/dc6.json', desc: '全景稳定线路，丰富精选', category: '🔋 其他备用' },
+  { name: '欧歌免费接口', url: 'https://xn--r44r-wn6lw489o.v.nxog.top/apia?id=3', desc: '多线路多源综合融合版', category: '🔋 其他备用' },
+  { name: '欧歌单线路', url: 'https://xn--xkkx-rp5imh.v.nxog.top/api.php?id=3', desc: '专线秒播线路，极致响应', category: '🔋 其他备用' },
+  { name: '王二小极速源', url: 'http://tvbox.xn--4kq62z5rby2qupq9ub.top/', desc: '微信公众号王二小放牛娃诚意之作', category: '🔋 其他备用' },
+  { name: '公众号王二小线', url: 'http://tv.999888987.xyz', desc: '极速多线影视聚合备用', category: '🔋 其他备用' },
+  { name: '爱TV吧央视源', url: 'https://700sjro44343.vicp.fun/vip/vip/tv.json', desc: '内置央视卫视直播及点播源', category: '🔋 其他备用' },
+  { name: '吃猫的鱼备用', url: 'https://d.kstore.dev/download/7213/吃猫的鱼', desc: 'KStore 高速多源接口', category: '🔋 其他备用' },
+  { name: '摸鱼儿接口', url: 'http://我不是.摸鱼儿.com', desc: '摸鱼必备，资源极速稳定', category: '🔋 其他备用' },
+  { name: 'OK吊炸天接口', url: 'http://ok321.top/tv', desc: '蜂蜜/FongMi 外壳专属点播源', category: '🔋 其他备用' }
+];
 
 // Deterministic Emby-style review rating generator based on string hash
 const getRating = (name: string): string => {
@@ -133,6 +171,25 @@ export default function App() {
   const [isImportingTvBox, setIsImportingTvBox] = useState(false);
   const [tvBoxImportTab, setTvBoxImportTab] = useState<'url' | 'local'>('url');
   const [tempTvBoxText, setTempTvBoxText] = useState('');
+  const [selectedPresetCategory, setSelectedPresetCategory] = useState<'⚡ 热门推荐' | '🔄 饭系多线' | '💎 精品特制' | '🔋 其他备用'>('⚡ 热门推荐');
+  const [cmsSourceStatuses, setCmsSourceStatuses] = useState<Record<string, { speed?: number; status: 'checking' | 'active' | 'error'; label?: string }>>({});
+  const [isCheckingAllCms, setIsCheckingAllCms] = useState(false);
+  const [selectedCmsIds, setSelectedCmsIds] = useState<string[]>([]);
+  const [presetStatuses, setPresetStatuses] = useState<Record<string, { status: 'idle' | 'checking' | 'active' | 'error'; sitesCount?: number; speed?: number; label?: string }>>({});
+  const [isCheckingPresets, setIsCheckingPresets] = useState(false);
+  const [isImportingAllValidPresets, setIsImportingAllValidPresets] = useState(false);
+  const [localPresets, setLocalPresets] = useState<TvBoxPreset[]>(() => {
+    const saved = localStorage.getItem('tvbox_presets_custom');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        // Fallback
+      }
+    }
+    return TVBOX_PRESETS;
+  });
+  const [selectedPresetUrls, setSelectedPresetUrls] = useState<string[]>([]);
 
   const parseTvBoxTextContent = (text: string): CMSSource[] => {
     let clean = text.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -1164,6 +1221,262 @@ export default function App() {
     };
     saveAllSettingsToServer(nextSettings);
     showToast('采集源已移除');
+  };
+
+  const handleCheckCmsSources = async () => {
+    if (!settings.cmsSources || settings.cmsSources.length === 0) {
+      showToast('目前没有已连接的影视采集站，请先导入！', 'info');
+      return;
+    }
+    setIsCheckingAllCms(true);
+    showToast('🚀 正在启动多源并发巡检测速，请稍候...', 'info');
+
+    const statuses: Record<string, { speed?: number; status: 'checking' | 'active' | 'error'; label?: string }> = {};
+    
+    // Set all to checking state first
+    settings.cmsSources.forEach(s => {
+      statuses[s.id] = { status: 'checking' };
+    });
+    setCmsSourceStatuses({ ...statuses });
+
+    // Perform check concurrently (up to 5 parallel workers to avoid server overload)
+    const sourcesToCheck = [...settings.cmsSources];
+    const workers = 5;
+    
+    const checkOne = async (source: any) => {
+      const startTime = performance.now();
+      try {
+        // Ping via cms-proxy with ac=list (which is fast) and force cache bypass
+        const response = await fetch(`/api/cms-proxy?url=${encodeURIComponent(source.url)}&ac=list&refresh=true`);
+        const endTime = performance.now();
+        const duration = Math.round(endTime - startTime);
+
+        if (response.ok) {
+          const data = await response.json();
+          // Verify if it is valid CMS payload (usually has class or list or equivalent)
+          if (data && (data.class || data.list || data.hasOwnProperty('code') || data.hasOwnProperty('page') || Array.isArray(data))) {
+            return { speed: duration, status: 'active' as const };
+          } else {
+            return { speed: duration, status: 'error' as const, label: '格式不兼容' };
+          }
+        } else {
+          return { status: 'error' as const, label: `HTTP ${response.status}` };
+        }
+      } catch (err: any) {
+        return { status: 'error' as const, label: '链接超时' };
+      }
+    };
+
+    const runQueue = async () => {
+      while (sourcesToCheck.length > 0) {
+        const source = sourcesToCheck.shift();
+        if (!source) break;
+        
+        const result = await checkOne(source);
+        statuses[source.id] = result;
+        setCmsSourceStatuses({ ...statuses });
+      }
+    };
+
+    const workerPromises = Array(Math.min(workers, sourcesToCheck.length))
+      .fill(null)
+      .map(() => runQueue());
+
+    await Promise.all(workerPromises);
+    setIsCheckingAllCms(false);
+    
+    const activeCount = Object.values(statuses).filter(s => s.status === 'active').length;
+    const errorCount = Object.values(statuses).filter(s => s.status === 'error').length;
+    showToast(`巡检完成！累计可用影视站 ${activeCount} 个，网络或格式故障 ${errorCount} 个！`, 'success');
+  };
+
+  const handlePurgeDeadCms = async () => {
+    if (!settings.cmsSources || settings.cmsSources.length === 0) return;
+    
+    const deadIds = Object.keys(cmsSourceStatuses).filter(id => cmsSourceStatuses[id].status === 'error');
+    if (deadIds.length === 0) {
+      showToast('未检测到任何死源，无需清理！(温馨提示：请先运行一键影视源健康度巡检)', 'info');
+      return;
+    }
+
+    const nextSources = settings.cmsSources.filter(s => !deadIds.includes(s.id));
+    
+    if (nextSources.length === 0) {
+      showToast('操作拦截：清退后影视源列表将为空！请至少保留一个影视源供日常查询。', 'error');
+      return;
+    }
+
+    const selectFallbackId = deadIds.includes(settings.selectedCmsId) ? nextSources[0].id : settings.selectedCmsId;
+
+    const nextSettings = {
+      ...settings,
+      cmsSources: nextSources,
+      selectedCmsId: selectFallbackId
+    };
+
+    await saveAllSettingsToServer(nextSettings);
+    // Clear check statuses after purge
+    setCmsSourceStatuses({});
+    showToast(`🧹 智能一键清退，已成功从主线列表中清退了 ${deadIds.length} 个不工作的失效影视源！`, 'success');
+  };
+
+  const [activePresetsSites, setActivePresetsSites] = useState<Record<string, any[]>>({});
+
+  const handleBatchDeleteCms = async () => {
+    if (selectedCmsIds.length === 0) {
+      showToast('❌ 请在列表中勾选要批量删除的影视源！', 'info');
+      return;
+    }
+
+    const nextSources = (settings.cmsSources || []).filter(
+      s => !selectedCmsIds.includes(s.id)
+    );
+
+    if (nextSources.length === 0) {
+      showToast('操作拦截：批量清退后影视源列表将为空！请至少保留一个影视源供日常查询。', 'error');
+      return;
+    }
+
+    const selectFallbackId = selectedCmsIds.includes(settings.selectedCmsId) ? nextSources[0].id : settings.selectedCmsId;
+
+    const nextSettings = {
+      ...settings,
+      cmsSources: nextSources,
+      selectedCmsId: selectFallbackId
+    };
+
+    await saveAllSettingsToServer(nextSettings);
+    setSelectedCmsIds([]);
+    showToast(`🧹 批量清理成功！已成功清除了您勾选的 ${selectedCmsIds.length} 个失效/自定义影视源！`, 'success');
+  };
+
+  const handleBatchCheckPresets = async () => {
+    if (isCheckingPresets) return;
+    setIsCheckingPresets(true);
+    showToast('🚀 启动多路并行 WAF-Bypass 订阅探测，正在对预置源进行并发测速...', 'info');
+
+    const nextStatuses: Record<string, { status: 'idle' | 'checking' | 'active' | 'error'; sitesCount?: number; speed?: number; label?: string }> = {};
+    localPresets.forEach(p => {
+      nextStatuses[p.url] = { status: 'checking' };
+    });
+    setPresetStatuses({ ...nextStatuses });
+    setActivePresetsSites({});
+
+    const presetsQueue = [...localPresets];
+    const workers = 6; // Excellent parallelized concurrency
+
+    const checkOnePreset = async (preset: typeof TVBOX_PRESETS[0]) => {
+      const startTime = performance.now();
+      try {
+        const response = await fetch(`/api/parse-tvbox?url=${encodeURIComponent(preset.url)}`);
+        const duration = Math.round(performance.now() - startTime);
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.count > 0) {
+            nextStatuses[preset.url] = { status: 'active', sitesCount: data.count, speed: duration };
+            setActivePresetsSites(prev => ({ ...prev, [preset.url]: data.sites }));
+          } else {
+            nextStatuses[preset.url] = { status: 'error', label: '节点空或无格式' };
+          }
+        } else {
+          nextStatuses[preset.url] = { status: 'error', label: `HTTP ${response.status}` };
+        }
+      } catch (err: any) {
+        nextStatuses[preset.url] = { status: 'error', label: '握手超时或网络错误' };
+      }
+      setPresetStatuses({ ...nextStatuses });
+    };
+
+    const runQueue = async () => {
+      while (presetsQueue.length > 0) {
+        const preset = presetsQueue.shift();
+        if (!preset) break;
+        await checkOnePreset(preset);
+      }
+    };
+
+    const workerPromises = Array(Math.min(workers, presetsQueue.length))
+      .fill(null)
+      .map(() => runQueue());
+
+    await Promise.all(workerPromises);
+    setIsCheckingPresets(false);
+
+    const activeCount = Object.values(nextStatuses).filter(s => s.status === 'active').length;
+    const errorCount = Object.values(nextStatuses).filter(s => s.status === 'error').length;
+    showToast(`🌟 批量状态探测完成！共在探测订阅中发现 ${activeCount} 个依然工作的高速订阅源，已标绿！`, 'success');
+  };
+
+  const saveLocalPresetsToStorage = (presets: TvBoxPreset[]) => {
+    setLocalPresets(presets);
+    localStorage.setItem('tvbox_presets_custom', JSON.stringify(presets));
+  };
+
+  const handleDeletePreset = (url: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = localPresets.filter(p => p.url !== url);
+    saveLocalPresetsToStorage(next);
+    setSelectedPresetUrls(prev => prev.filter(u => u !== url));
+    showToast('预置订阅源已成功从备选列表中移除');
+  };
+
+  const handleBatchDeletePresets = () => {
+    const nextFiltered = localPresets.filter(p => p.category === selectedPresetCategory);
+    const urlsInCurrentCategory = nextFiltered.map(p => p.url);
+    const selectedInCurrentCategory = selectedPresetUrls.filter(u => urlsInCurrentCategory.includes(u));
+
+    if (selectedInCurrentCategory.length === 0) {
+      showToast('❌ 请先在当前选项卡下勾选要批量删除的预置源卡片！', 'info');
+      return;
+    }
+
+    const next = localPresets.filter(p => !selectedInCurrentCategory.includes(p.url));
+    saveLocalPresetsToStorage(next);
+    setSelectedPresetUrls(prev => prev.filter(u => !selectedInCurrentCategory.includes(u)));
+    showToast(`🧹 批量管理完毕！已为您成功剔除了 ${selectedInCurrentCategory.length} 个失效或未启用的预置订阅源！`, 'success');
+  };
+
+  const handleResetPresets = () => {
+    saveLocalPresetsToStorage(TVBOX_PRESETS);
+    setSelectedPresetUrls([]);
+    setPresetStatuses({});
+    showToast('✨ 精选预置订阅源已完全重置为出厂默认设置！', 'success');
+  };
+
+  const handleImportAllActivePresets = async () => {
+    const activeKeys = Object.keys(presetStatuses).filter(k => presetStatuses[k].status === 'active');
+    if (activeKeys.length === 0) {
+      showToast('⚠️ 未检测到可用的激活订阅源！请先点击【🔍 一键检验预置订阅源】检测可用站点。', 'info');
+      return;
+    }
+
+    setIsImportingAllValidPresets(true);
+    let allNewSites: any[] = [];
+    activeKeys.forEach(url => {
+      const sitesOfUrl = activePresetsSites[url] || [];
+      allNewSites = [...allNewSites, ...sitesOfUrl];
+    });
+
+    if (allNewSites.length === 0) {
+      showToast('👻 抱歉，未能从可连通的订阅源中提起出任何有效的站点。', 'error');
+      setIsImportingAllValidPresets(false);
+      return;
+    }
+
+    const currentSources = settings.cmsSources || [];
+    const filteredNewSites = allNewSites.filter(
+      (s: any) => !currentSources.some(exist => exist.url === s.url)
+    );
+
+    if (filteredNewSites.length === 0) {
+      showToast('💡 检验发现，所有有效预置源内的影视接口，在本机前台列表中均已成功存储，无需重复导入。', 'info');
+    } else {
+      const updated = [...currentSources, ...filteredNewSites];
+      await saveAllSettingsToServer({ ...settings, cmsSources: updated });
+      showToast(`🎉 华丽大功告成！已成功从 ${activeKeys.length} 个绿色订阅中智能重组并无痛合并了 ${filteredNewSites.length} 个精选影视数据接口！`, 'success');
+    }
+    setIsImportingAllValidPresets(false);
   };
 
   const handleSaveEditCms = (id: string) => {
@@ -2883,6 +3196,7 @@ export default function App() {
                             {/* Custom Tab Selector */}
                             <div className="flex border-b border-zinc-200 text-[11px] font-bold">
                               <button
+                                type="button"
                                 onClick={() => setTvBoxImportTab('url')}
                                 className={`flex-1 pb-1.5 border-b-2 transition ${
                                   tvBoxImportTab === 'url'
@@ -2893,6 +3207,7 @@ export default function App() {
                                 🌐 线上 URL 导入
                               </button>
                               <button
+                                type="button"
                                 onClick={() => setTvBoxImportTab('local')}
                                 className={`flex-1 pb-1.5 border-b-2 transition ${
                                   tvBoxImportTab === 'local'
@@ -2916,8 +3231,194 @@ export default function App() {
                                     value={tempTvBoxUrl}
                                     onChange={(e) => setTempTvBoxUrl(e.target.value)}
                                     placeholder="https://raw.githubusercontent.com/.../tvbox.json"
-                                    className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400"
+                                    className="w-full bg-white border border-zinc-200 text-xs rounded-md p-2 focus:ring-1 focus:ring-blue-500 focus:outline-hidden text-zinc-900 placeholder-zinc-400 font-medium"
                                   />
+                                </div>
+
+                                {/* Premium Presets Panel */}
+                                <div className="bg-white border border-zinc-200 rounded-xl p-3 space-y-2.5 shadow-2xs text-left">
+                                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-100 pb-1.5 gap-2">
+                                    <span className="text-[11px] font-extrabold text-zinc-750 flex items-center space-x-1">
+                                      <span>🌟 智能精选订阅源 (一键秒级检测/合并)</span>
+                                    </span>
+                                    <div className="flex items-center space-x-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={handleBatchCheckPresets}
+                                        disabled={isCheckingPresets}
+                                        className="text-[9px] font-extrabold px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-250 hover:bg-blue-100 disabled:opacity-50 transition cursor-pointer"
+                                      >
+                                        {isCheckingPresets ? '⏳ 并发探测中' : '🔍 一键自动检测源'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={handleImportAllActivePresets}
+                                        disabled={isImportingAllValidPresets}
+                                        className="text-[9px] font-extrabold px-2 py-0.5 rounded bg-emerald-50 text-emerald-750 border border-emerald-200 hover:bg-emerald-100 disabled:opacity-50 transition cursor-pointer"
+                                        title="探测成功后，点击此处可以一键导入合并所有绿灯有效的订阅影视站"
+                                      >
+                                        {isImportingAllValidPresets ? '⏳ 智能合并中' : '📥 一键全量合并工作源'}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {(() => {
+                                    const currentCategoryPresets = localPresets.filter(p => p.category === selectedPresetCategory);
+                                    const selectedPresetsInCat = selectedPresetUrls.filter(u => currentCategoryPresets.some(p => p.url === u));
+                                    const isAllInCatSelected = currentCategoryPresets.length > 0 && selectedPresetsInCat.length === currentCategoryPresets.length;
+
+                                    return (
+                                      <>
+                                        {/* Category Switcher Tabs */}
+                                        <div className="flex flex-col space-y-2 font-sans">
+                                          <div className="flex flex-wrap gap-1">
+                                            {(['⚡ 热门推荐', '🔄 饭系多线', '💎 精品特制', '🔋 其他备用'] as const).map(cat => (
+                                              <button
+                                                key={cat}
+                                                type="button"
+                                                onClick={() => setSelectedPresetCategory(cat)}
+                                                className={`px-2 py-1 rounded text-[10px] font-bold transition cursor-pointer border-none ${
+                                                  selectedPresetCategory === cat
+                                                    ? 'bg-blue-600 text-white shadow-3xs'
+                                                    : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700'
+                                                }`}
+                                              >
+                                                {cat}
+                                              </button>
+                                            ))}
+                                          </div>
+
+                                          {/* Batch management tools */}
+                                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 bg-zinc-50/65 border border-zinc-150 p-1.5 rounded-lg text-left">
+                                            <div className="flex items-center space-x-1.5">
+                                              <label className="inline-flex items-center space-x-1 text-[9px] font-bold text-zinc-500 cursor-pointer select-none bg-white border border-zinc-200 rounded px-1.5 py-0.5 hover:bg-zinc-100 hover:text-zinc-700 transition">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={isAllInCatSelected}
+                                                  onChange={(e) => {
+                                                    const urls = currentCategoryPresets.map(p => p.url);
+                                                    if (e.target.checked) {
+                                                      setSelectedPresetUrls(prev => Array.from(new Set([...prev, ...urls])));
+                                                    } else {
+                                                      setSelectedPresetUrls(prev => prev.filter(u => !urls.includes(u)));
+                                                    }
+                                                  }}
+                                                  className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500 h-3 w-3 cursor-pointer"
+                                                />
+                                                <span>分类全选</span>
+                                              </label>
+                                              {selectedPresetsInCat.length > 0 && (
+                                                <span className="text-[9px] font-extrabold text-blue-700 bg-blue-100/60 px-1.5 py-0.5 rounded border border-blue-200">
+                                                  已选 {selectedPresetsInCat.length} 个
+                                                </span>
+                                              )}
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                              {selectedPresetsInCat.length > 0 && (
+                                                <button
+                                                  type="button"
+                                                  onClick={handleBatchDeletePresets}
+                                                  className="text-[9px] font-extrabold px-2 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-220 hover:bg-rose-100 transition cursor-pointer"
+                                                >
+                                                  🚫 批量清理已选 ({selectedPresetsInCat.length})
+                                                </button>
+                                              )}
+                                              <button
+                                                type="button"
+                                                onClick={handleResetPresets}
+                                                className="text-[9px] font-medium px-2 py-0.5 rounded bg-zinc-100 text-zinc-650 border border-zinc-200 hover:bg-zinc-200 hover:text-zinc-800 transition cursor-pointer"
+                                                title="将预置订阅源列表重置回系统默认初装设置"
+                                              >
+                                                🔄 恢复全部默认
+                                              </button>
+                                            </div>
+                                          </div>
+                                        </div>
+
+                                        {/* Filtered presets list with nice badges */}
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-[170px] overflow-y-auto pr-1">
+                                          {currentCategoryPresets.map((preset, index) => (
+                                            <div
+                                              key={index}
+                                              onClick={() => {
+                                                setTempTvBoxUrl(preset.url);
+                                                showToast(`已填入 ${preset.name}，请点击下方立即拉取！`, 'info');
+                                              }}
+                                              className={`text-left p-1.5 rounded-lg border transition cursor-pointer text-[11px] flex flex-col justify-between items-start leading-tight relative group ${
+                                                tempTvBoxUrl === preset.url
+                                                  ? 'border-blue-500 bg-blue-50/50 hover:bg-blue-50'
+                                                  : 'border-zinc-150 bg-zinc-50/40 hover:bg-zinc-100/70 hover:border-zinc-300'
+                                              }`}
+                                            >
+                                              <div className="font-extrabold text-zinc-750 flex items-center justify-between w-full gap-1">
+                                                <div className="flex items-center space-x-1.5 min-w-0 flex-1" onClick={(e) => e.stopPropagation()}>
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={selectedPresetUrls.includes(preset.url)}
+                                                    onChange={(e) => {
+                                                      if (e.target.checked) {
+                                                        setSelectedPresetUrls(prev => [...prev, preset.url]);
+                                                      } else {
+                                                        setSelectedPresetUrls(prev => prev.filter(u => u !== preset.url));
+                                                      }
+                                                    }}
+                                                    className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 cursor-pointer flex-shrink-0"
+                                                  />
+                                                  <span className="truncate block font-extrabold text-zinc-750">{preset.name}</span>
+                                                </div>
+
+                                                <div className="flex items-center space-x-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                                                  {presetStatuses[preset.url] ? (
+                                                    (() => {
+                                                      const statusObj = presetStatuses[preset.url];
+                                                      if (statusObj.status === 'checking') {
+                                                        return (
+                                                          <span className="text-[8px] text-amber-600 bg-amber-50 px-1 py-0.2 rounded-sm font-sans font-bold flex items-center animate-pulse scale-90">
+                                                            <span>⏳ 探测中..</span>
+                                                          </span>
+                                                        );
+                                                      } else if (statusObj.status === 'active') {
+                                                        return (
+                                                          <span className="text-[8px] text-emerald-600 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded-sm font-sans font-bold scale-90 flex items-center">
+                                                            <span>✅ {statusObj.sitesCount}站 [{statusObj.speed}ms]</span>
+                                                          </span>
+                                                        );
+                                                      } else {
+                                                        return (
+                                                          <span className="text-[8px] text-zinc-400 bg-zinc-50 border border-zinc-200 px-1.5 py-0.2 rounded-sm font-sans font-medium scale-90 flex items-center" title={statusObj.label}>
+                                                            <span>❌ 离线</span>
+                                                          </span>
+                                                        );
+                                                      }
+                                                    })()
+                                                  ) : (
+                                                    tempTvBoxUrl === preset.url && (
+                                                      <span className="text-[9px] text-blue-650 bg-blue-100 px-1 py-0.2 rounded-sm font-sans font-bold flex items-center space-x-0.5 scale-90">
+                                                        <span>已选中</span>
+                                                      </span>
+                                                    )
+                                                  )}
+
+                                                  <button
+                                                    type="button"
+                                                    onClick={(e) => handleDeletePreset(preset.url, e)}
+                                                    className="text-zinc-400 hover:text-red-600 hover:bg-red-50 p-0.5 rounded transition cursor-pointer"
+                                                    title="删除此项订阅预设"
+                                                  >
+                                                    <Trash2 className="h-3 w-3" />
+                                                  </button>
+                                                </div>
+                                              </div>
+                                              <div className="text-[10px] text-zinc-400 mt-0.5 line-clamp-1 w-full pl-[20px]">{preset.desc}</div>
+                                              <div className="text-[9px] text-zinc-350 mt-1 truncate font-mono select-all w-full max-w-full border-t border-zinc-100 pt-0.5 scale-95 origin-left pl-[20px]">
+                                                {preset.url}
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
 
                                 <button
@@ -3065,13 +3566,66 @@ export default function App() {
                           </div>
 
                           {/* Existing Source list */}
-                          <div className="space-y-2">
-                            <span className="text-xs font-bold text-zinc-500 tracking-wide block">目前已连接的数据站 (点击任意行即可设定为主采集源)：</span>
+                          <div className="space-y-3">
+                            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2 border-b border-zinc-150 pb-2 text-left">
+                              <div className="space-y-1">
+                                <span className="text-xs font-bold text-zinc-700 tracking-wide block">目前已连接的数据站 (点击设定为主采集源)：</span>
+                                <div className="flex items-center gap-2">
+                                  <label className="inline-flex items-center space-x-1.5 text-[10px] font-bold text-zinc-500 cursor-pointer select-none bg-zinc-50 border border-zinc-200 rounded px-1.5 py-0.5 hover:bg-zinc-100 hover:text-zinc-700 transition">
+                                    <input
+                                      type="checkbox"
+                                      checked={settings.cmsSources && settings.cmsSources.length > 0 && selectedCmsIds.length === settings.cmsSources.length}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedCmsIds((settings.cmsSources || []).map(s => s.id));
+                                        } else {
+                                          setSelectedCmsIds([]);
+                                        }
+                                      }}
+                                      className="rounded border-zinc-300 text-blue-600 focus:ring-blue-500 h-3 w-3 cursor-pointer"
+                                    />
+                                    <span>全选</span>
+                                  </label>
+                                  {selectedCmsIds.length > 0 && (
+                                    <span className="text-[10px] font-extrabold text-blue-700 bg-blue-100/60 px-2 py-0.5 rounded border border-blue-200">
+                                      已选中 {selectedCmsIds.length} 个
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1.5 self-start sm:self-auto">
+                                <button
+                                  type="button"
+                                  onClick={handleCheckCmsSources}
+                                  disabled={isCheckingAllCms}
+                                  className="text-[10px] font-bold px-2 py-1 rounded bg-blue-50 text-blue-750 hover:bg-blue-100 disabled:opacity-50 transition border border-blue-200 cursor-pointer"
+                                >
+                                  {isCheckingAllCms ? '⏳ 测速中...' : '⚡ 一键智能巡检'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handlePurgeDeadCms}
+                                  className="text-[10px] font-bold px-2 py-1 rounded bg-rose-50 text-rose-700 hover:bg-rose-100 transition border border-rose-200 cursor-pointer"
+                                  title="一键移除所有巡检报错或不可连通的影视配置线路"
+                                >
+                                  🧹 清退死链源
+                                </button>
+                                {selectedCmsIds.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={handleBatchDeleteCms}
+                                    className="text-[10px] font-extrabold px-2.5 py-1 rounded bg-red-650 text-white hover:bg-red-750 transition shadow-2xs cursor-pointer border-none flex items-center space-x-1"
+                                  >
+                                    <span>🚫 批量删除 ({selectedCmsIds.length})</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
                             <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                               {settings.cmsSources && settings.cmsSources.map((source) => {
                                 const isSelected = settings.selectedCmsId === source.id;
                                 const isEditing = editingCmsId === source.id;
-
+ 
                                 if (isEditing) {
                                   return (
                                     <div
@@ -3118,7 +3672,7 @@ export default function App() {
                                     </div>
                                   );
                                 }
-
+ 
                                 return (
                                   <div
                                     key={source.id}
@@ -3137,6 +3691,20 @@ export default function App() {
                                         : 'bg-zinc-50 border-zinc-200 hover:bg-zinc-100 hover:border-zinc-300'
                                     }`}
                                   >
+                                    <div className="flex items-center pr-2.5" onClick={(e) => e.stopPropagation()}>
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedCmsIds.includes(source.id)}
+                                        onChange={(e) => {
+                                          if (e.target.checked) {
+                                            setSelectedCmsIds(prev => [...prev, source.id]);
+                                          } else {
+                                            setSelectedCmsIds(prev => prev.filter(id => id !== source.id));
+                                          }
+                                        }}
+                                        className="rounded border-zinc-300 text-blue-605 focus:ring-blue-500 h-4 w-4 cursor-pointer"
+                                      />
+                                    </div>
                                     <div className="truncate flex-1 pr-3">
                                       <div className="flex items-center space-x-1.5">
                                         <span className={`font-bold text-xs ${isSelected ? 'text-blue-700 font-extrabold' : 'text-zinc-800'}`}>
@@ -3144,6 +3712,31 @@ export default function App() {
                                         </span>
                                         {isSelected && (
                                           <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded-sm scale-90 font-sans font-medium">当前主站</span>
+                                        )}
+                                        {/* Diagnostic Health Checks Status Pin */}
+                                        {cmsSourceStatuses[source.id] && (
+                                          (() => {
+                                            const check = cmsSourceStatuses[source.id];
+                                            if (check.status === 'checking') {
+                                              return (
+                                                <span className="text-[9px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded flex items-center space-x-0.5 animate-pulse scale-90">
+                                                  <span>⏳ 测速中</span>
+                                                </span>
+                                              );
+                                            } else if (check.status === 'active') {
+                                              return (
+                                                <span className="text-[9px] bg-emerald-50 text-emerald-750 border border-emerald-200 px-1.5 py-0.5 rounded flex items-center space-x-0.5 scale-90 font-bold">
+                                                  <span>🚀 {check.speed}ms</span>
+                                                </span>
+                                              );
+                                            } else {
+                                              return (
+                                                <span className="text-[9px] bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded flex items-center space-x-0.5 scale-90 font-bold" title={check.label || '失效'}>
+                                                  <span>⚠️ {check.label || '连接失败'}</span>
+                                                </span>
+                                              );
+                                            }
+                                          })()
                                         )}
                                       </div>
                                       <span className="text-[9px] text-zinc-400 font-mono block truncate mt-1">地址: {source.url}</span>
@@ -3518,6 +4111,149 @@ export default function App() {
                               <span className="text-[11px] text-zinc-500 leading-relaxed block mt-1">
                                 绕过云网络中继。由您的浏览器直接连接 CMS 采集源接口。<b>速度极快、不耗用服务端任何连接数与带宽，彻底规避 Vercel 等海外云端被墙的问题</b>。但由于绝大多数视频采集源均未开放跨域 CORS 允许头，<b>通常需要您在浏览器安装 【CORS Unblock】 跨域解锁扩展插件才可正常运作</b>。
                               </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* SECTION 5: JSON CONFIGURATION BACKUP & ONE-CLICK RESTORE */}
+                      <div className="bg-white rounded-2xl border border-zinc-200 p-6 space-y-4 shadow-xs">
+                        <div className="flex items-center space-x-2 border-b border-zinc-100 pb-3.5">
+                          <Download className="h-4.5 w-4.5 text-rose-600" />
+                          <div>
+                            <h4 className="text-sm font-bold text-zinc-800">5. 全套采集与播放数据备份、恢复与长期保存</h4>
+                            <p className="text-xs text-zinc-400">极简影院因无状态轻量化部署，建议在配置好您心仪的多个采集源及解析后，点击下方一键备份到您的本地设备。重启后一秒导入即可全部复活！</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                          <div className="space-y-3 bg-zinc-50 p-4 rounded-xl border border-zinc-150">
+                            <span className="text-xs font-bold text-zinc-700 block">💾 一键导出本地备份 (.json)</span>
+                            <p className="text-[11px] text-zinc-500 leading-relaxed">
+                              打包导出您配置的所有 CMS 采集数据源、M3U8 解析器、IPTV 直播网关和映射切分字典，用以在云端重启时极速重装。
+                            </p>
+                            <button
+                              id="export-settings-btn"
+                              onClick={() => {
+                                try {
+                                  const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+                                  const url = URL.createObjectURL(blob);
+                                  const a = document.createElement('a');
+                                  a.href = url;
+                                  a.download = `cineflow_settings_backup_${Date.now()}.json`;
+                                  document.body.appendChild(a);
+                                  a.click();
+                                  document.body.removeChild(a);
+                                  URL.revokeObjectURL(url);
+                                  showToast('配置备份文件已成功打包并下载，请妥善保存！', 'success');
+                                } catch (e: any) {
+                                  showToast(`导出配置失败：${e.message}`, 'error');
+                                }
+                              }}
+                              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 px-3 rounded-lg transition shadow-xs flex items-center justify-center space-x-1.5 cursor-pointer"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              <span>导出 Backup 备份配置文件</span>
+                            </button>
+                          </div>
+
+                          <div className="space-y-3 bg-zinc-50 p-4 rounded-xl border border-zinc-150">
+                            <span className="text-xs font-bold text-zinc-700 block">📤 导入备份配置文件</span>
+                            <p className="text-[11px] text-zinc-500 leading-relaxed">
+                              从本地选择之前导出的 JSON 备份文件。系统将立即恢复您先前设定的全部资源节点，且自动热同步至云中台服务。
+                            </p>
+                            <div className="relative">
+                              <input
+                                id="import-settings-file"
+                                type="file"
+                                accept=".json"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  const reader = new FileReader();
+                                  reader.onload = async (event) => {
+                                    try {
+                                      const text = event.target?.result as string;
+                                      const parsed = JSON.parse(text);
+                                      if (!parsed || (!parsed.cmsSources && !parsed.iptvSources)) {
+                                        throw new Error('备份文件格式不符合规范：未找到有效的采集或解析属性');
+                                      }
+                                      await saveAllSettingsToServer(parsed);
+                                      showToast('🎉 🎉 全套数据还原成功！已恢复并在云端激活了您所有的资源节点和规则！', 'success');
+                                    } catch (err: any) {
+                                      showToast(`解析/恢复备份失败：${err.message || '文件数据有误或已损坏'}`, 'error');
+                                    }
+                                  };
+                                  reader.readAsText(file);
+                                  e.target.value = '';
+                                }}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                              />
+                              <button
+                                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2 px-3 rounded-lg transition shadow-xs flex items-center justify-center space-x-1.5 cursor-pointer"
+                              >
+                                <Upload className="h-3.5 w-3.5" />
+                                <span>选择备份 JSON 文件导入</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* TEXTAREA COPY AND PASTE */}
+                        <div className="bg-zinc-50 p-4 rounded-xl border border-zinc-150 space-y-3 pt-4">
+                          <span className="text-xs font-bold text-zinc-700 block">📋 备用文本快速导入/还原分享</span>
+                          <p className="text-[11px] text-zinc-500 leading-relaxed">
+                            您也可以一键复制下方代表您全部本地资源的 JSON 代码文本作为纯文本备忘。在任何设备上，直接点击 “粘贴代码配置快速还原” 即可一秒瞬间配属所有节点！
+                          </p>
+                          
+                          <div className="space-y-2">
+                            <textarea
+                              id="backup-string-textarea"
+                              rows={3}
+                              readOnly
+                              value={JSON.stringify(settings)}
+                              onClick={(e) => {
+                                (e.target as HTMLTextAreaElement).select();
+                              }}
+                              className="w-full bg-white border border-zinc-200 text-zinc-500 font-mono text-[9px] rounded-lg p-2 focus:outline-hidden"
+                            />
+                            
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await navigator.clipboard.writeText(JSON.stringify(settings));
+                                    showToast('已复制完整配置 JSON 字符！可直接保存在微信、电脑文本或发给好友共享采集源', 'success');
+                                  } catch (e: any) {
+                                    showToast('由于浏览器安全限制，请手动双击上方文本框并右键“拷贝”', 'info');
+                                  }
+                                }}
+                                className="bg-zinc-800 hover:bg-zinc-900 text-white font-bold text-xs py-2 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer"
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                                <span>复制全站配置代码</span>
+                              </button>
+                              
+                              <button
+                                onClick={async () => {
+                                  const text = prompt('请确认已经复制了之前 Cineflow 导出的配置 JSON 字符串，粘贴到下方：');
+                                  if (!text) return;
+                                  try {
+                                    const parsed = JSON.parse(text.trim());
+                                    if (!parsed || (!parsed.cmsSources && !parsed.iptvSources)) {
+                                      throw new Error('未检测到有效的 cmsSources 或 iptvSources 配置');
+                                    }
+                                    await saveAllSettingsToServer(parsed);
+                                    showToast('🎉 🎉 经由文本配置秒级完成了解析，您的采集节点和资源大军已全数安装运行中！', 'success');
+                                  } catch (err: any) {
+                                    alert(`导入配置失败：请输入正确的 JSON 数据块格式 (${err.message})`);
+                                  }
+                                }}
+                                className="bg-red-650 hover:bg-red-700 text-white font-bold text-xs py-2 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer"
+                              >
+                                <Upload className="h-3.5 w-3.5" />
+                                <span>粘贴代码配置快速还原</span>
+                              </button>
                             </div>
                           </div>
                         </div>

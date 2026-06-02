@@ -29,6 +29,7 @@ export default function VideoPlayer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
+  const [scaleMode, setScaleMode] = useState<'contain' | 'fill' | 'cover'>('contain');
   const hlsRef = useRef<Hls | null>(null);
 
   const [showResumeNotice, setShowResumeNotice] = useState(false);
@@ -220,7 +221,8 @@ export default function VideoPlayer({
             <video
               id="h5-video-node"
               ref={videoRef}
-              className="w-full h-full object-contain"
+              className="w-full h-full"
+              style={{ objectFit: scaleMode }}
               controls
               playsInline
               preload="auto"
@@ -292,7 +294,34 @@ export default function VideoPlayer({
           <span className="text-slate-300 select-all truncate">{playUrl}</span>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 flex-wrap gap-2">
+          {!useParser && (
+            <div className="flex items-center space-x-1 bg-slate-800/80 p-0.5 rounded-lg border border-slate-700/80 mr-1">
+              <span className="text-[10px] text-slate-400 px-2 font-medium shrink-0">画面设置:</span>
+              {(['contain', 'fill', 'cover'] as const).map(mode => {
+                const labels = {
+                  contain: '📺 原始/等比',
+                  fill: '↔️ 拉伸填充',
+                  cover: '✂️ 裁剪画面'
+                };
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setScaleMode(mode)}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition cursor-pointer select-none ${
+                      scaleMode === mode
+                        ? 'bg-blue-600 text-white shadow-[0_2px_8px_rgba(37,99,235,0.3)]'
+                        : 'text-slate-300 hover:text-white hover:bg-slate-700/60'
+                    }`}
+                  >
+                    {labels[mode]}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {onNavigateEpisode && (
             <div className="flex items-center space-x-1 bg-slate-850 p-0.5 rounded-lg border border-slate-800">
               <button

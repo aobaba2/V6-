@@ -5,6 +5,8 @@ import crypto from 'crypto';
 import http from 'http';
 import https from 'https';
 import dns from 'dns';
+import urlModule from 'url';
+import zlib from 'zlib';
 import { AppSettings } from './src/types.js';
 
 // Setup default settings in case config file is not found
@@ -95,7 +97,7 @@ const app = express();
 const PORT = 3000;
 const DEFAULT_SETTINGS_FILE = path.join(process.cwd(), 'data', 'settings.json');
 const DATA_DIR = process.env.VERCEL ? '/tmp' : path.join(process.cwd(), 'data');
-const SETTINGS_FILE = process.env.VERCEL ? '/tmp/settings.json' : path.join(DATA_DIR, 'settings.json');
+const SETTINGS_FILE = process.env.VERCEL ? '/tmp/settings.json' : path.join(DATA_DIR, 'settings_user.json');
 
 // Ensure data folder exists
 if (!process.env.VERCEL) {
@@ -149,16 +151,20 @@ function getSettings(): AppSettings {
       }
 
       return settings;
-    } else if (process.env.VERCEL && fs.existsSync(DEFAULT_SETTINGS_FILE)) {
-      // Warm up /tmp/settings.json with pre-baked seed settings on Vercel initialization
-      const data = fs.readFileSync(DEFAULT_SETTINGS_FILE, 'utf-8');
-      const settings = JSON.parse(data) as AppSettings;
-      try {
-        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf-8');
-      } catch (writeErr) {
-        console.error('Error writing seed settings to /tmp/settings.json:', writeErr);
+    } else {
+      // SETTINGS_FILE (settings_user.json) does not exist! Try to seed it from DEFAULT_SETTINGS_FILE (data/settings.json)
+      const seedFile = path.join(process.cwd(), 'data', 'settings.json');
+      if (fs.existsSync(seedFile)) {
+        console.log('[Settings Initializer] Seeding settings_user.json from original settings.json...');
+        try {
+          const data = fs.readFileSync(seedFile, 'utf-8');
+          const settings = JSON.parse(data) as AppSettings;
+          saveSettings(settings); // write to settings_user.json
+          return settings;
+        } catch (err) {
+          console.error('Error reading the seed default settings.json file:', err);
+        }
       }
-      return settings;
     }
   } catch (err) {
     console.error('Error loading settings, using defaults:', err);
@@ -218,6 +224,60 @@ setInterval(() => {
   }
 }, 60000);
 
+// Helper to convert any custom/Unicode/Chinese URLs into standards-compliant URLs (Punycode domains + URL-encoded paths)
+function toCompliantUrl(urlStr: string): string {
+  let u = urlStr.trim();
+  if (!u.startsWith('http://') && !u.startsWith('https://')) {
+    u = 'http://' + u;
+  }
+  // Optimization: If the URL is purely standard ASCII, return it completely untouched
+  // to avoid any potential side effects like double URL encoding on nested query parameters.
+  if (!/[^\x00-\x7F]/.test(u)) {
+    return u;
+  }
+  try {
+    const tempUrl = new URL(u);
+    let hostnameStr = tempUrl.hostname;
+    // Direct Unicode checking, convert to Punycode/ASCII if contains Unicode
+    if (/[^\x00-\x7F]/.test(hostnameStr)) {
+      hostnameStr = urlModule.domainToASCII(hostnameStr);
+    }
+    
+    // Path block encoding
+    let pathnameStr = tempUrl.pathname.split('/').map(segment => {
+      if (/[^\x00-\x7F]/.test(segment)) {
+        try {
+          return encodeURIComponent(decodeURIComponent(segment));
+        } catch {
+          return encodeURIComponent(segment);
+        }
+      }
+      return segment;
+    }).join('/');
+    
+    // Reconstruct query parameters safely only if query parameters have non-ASCII
+    let searchStr = tempUrl.search;
+    if (searchStr && searchStr.length > 1 && /[^\x00-\x7F]/.test(searchStr)) {
+      const searchParams = new URLSearchParams(searchStr);
+      const encodedParams = new URLSearchParams();
+      searchParams.forEach((val, key) => {
+        encodedParams.set(key, val);
+      });
+      searchStr = '?' + encodedParams.toString();
+    }
+    
+    const finalUrl = `${tempUrl.protocol}//${hostnameStr}${tempUrl.port ? ':' + tempUrl.port : ''}${pathnameStr}${searchStr}${tempUrl.hash}`;
+    return finalUrl;
+  } catch (err) {
+    console.warn('[toCompliantUrl] Normalization failed, fallback to encodeURI:', err);
+    try {
+      return encodeURI(u);
+    } catch {
+      return u;
+    }
+  }
+}
+
 // Helper to filter out intranet, loopback and private IP space queries (including localhost)
 function isPrivateUrl(urlStr: string): boolean {
   try {
@@ -252,13 +312,15 @@ app.get('/api/cms-proxy', async (req, res) => {
     return;
   }
 
-  if (isPrivateUrl(url as string)) {
+  const compliantUrl = toCompliantUrl(url as string);
+
+  if (isPrivateUrl(compliantUrl)) {
     res.status(400).json({ error: '安全检测未通过：该采集源部署在局域网、内网或回路地址上，云端后台无法连接。如果您想播放本地源，请在右下角【系统设置】中开启【浏览器极速直连模式】。' });
     return;
   }
 
   // Generate a distinct stable cache key
-  const cacheKey = `${url || ''}_ac:${ac || ''}_pg:${pg || ''}_t:${t || ''}_wd:${wd || ''}_ids:${ids || ''}`;
+  const cacheKey = `${compliantUrl}_ac:${ac || ''}_pg:${pg || ''}_t:${t || ''}_wd:${wd || ''}_ids:${ids || ''}`;
   const now = Date.now();
 
   const isForceRefresh = refresh === 'true';
@@ -274,7 +336,7 @@ app.get('/api/cms-proxy', async (req, res) => {
   }
 
   try {
-    const targetUrl = new URL(url as string);
+    const targetUrl = new URL(compliantUrl);
 
     // Append query parameters to target URL
     if (ac) targetUrl.searchParams.set('ac', ac as string);
@@ -457,7 +519,9 @@ app.get('/api/parse-m3u', async (req, res) => {
     return;
   }
 
-  if (isPrivateUrl(url)) {
+  const compliantUrl = toCompliantUrl(url);
+
+  if (isPrivateUrl(compliantUrl)) {
     res.status(400).json({
       error: '安全检测未通过：该 M3U 订阅源地址部署在局域网、内网或回路地址（如 127.0.0.1）上，云端后台无法直接触达。如果您想加载本地源，请在旁边直接选择【本地文件/纯文本导入】选项，即可直接在您的浏览器端完成本地秒级解析与安全导入！'
     });
@@ -465,10 +529,10 @@ app.get('/api/parse-m3u', async (req, res) => {
   }
 
   try {
-    const targetUrl = new URL(url);
-    console.log(`[M3U Parser] Loading file list from: ${url}`);
+    const targetUrl = new URL(compliantUrl);
+    console.log(`[M3U Parser] Loading file list from: ${compliantUrl}`);
 
-    const response = await robustRequest(url);
+    const response = await robustRequest(compliantUrl);
 
     if (response.status < 200 || response.status >= 300) {
        res.status(response.status).json({ error: `无法获取该M3U文件 (HTTP 状态码: ${response.status})` });
@@ -705,6 +769,11 @@ function normalizeTvBoxUrl(urlStr: string): string {
     // 2. Gitee Blob to Raw URLs
     if (u.includes('gitee.com')) {
       u = u.replace(/gitee\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+)/i, 'gitee.com/$1/$2/raw/$3/$4');
+      // Append download=true to Gitee raw links to bypass Gitee's landing page disclaimer/preview blocks
+      if (u.includes('/raw/') && !u.includes('download=true')) {
+        const separator = u.includes('?') ? '&' : '?';
+        u = `${u}${separator}download=true`;
+      }
     }
 
     // 3. Gitlab Blob to Raw URLs
@@ -726,6 +795,145 @@ function normalizeTvBoxUrl(urlStr: string): string {
     console.error('[TVBox URL Normalization Error]', e);
   }
   return u;
+}
+
+async function resolveLanzouUrl(urlStr: string): Promise<string> {
+  if (!/lanzou[a-z]\.com|lzs\.jp|lanzou\.com/i.test(urlStr)) {
+    return urlStr;
+  }
+
+  try {
+    console.log(`[Lanzou Resolver] Parsing Lanzou URL: ${urlStr}`);
+    const parsedUrl = new URL(urlStr);
+    const host = parsedUrl.host;
+    const protocol = parsedUrl.protocol;
+    const mainPage = await robustRequest(urlStr);
+    const mainHtml = mainPage.text;
+
+    let iframeUrlStr = '';
+    const iframeRegex = /src\s*=\s*['"]([^'"]*\/fn\?[^'"]+)['"]/i;
+    const iframeMatch = mainHtml.match(iframeRegex);
+    if (iframeMatch) {
+      const src = iframeMatch[1];
+      iframeUrlStr = src.startsWith('http') ? src : `${protocol}//${host}${src}`;
+    } else {
+      if (urlStr.includes('/fn?')) {
+        iframeUrlStr = urlStr;
+      } else {
+        const fnMatch = mainHtml.match(/\/fn\?[a-zA-Z0-9_=&]+/i);
+        if (fnMatch) {
+          iframeUrlStr = `${protocol}//${host}${fnMatch[0]}`;
+        }
+      }
+    }
+
+    if (!iframeUrlStr) {
+      console.log(`[Lanzou Resolver] No iframe found, trying to find downprocess directly...`);
+      iframeUrlStr = urlStr;
+    }
+
+    console.log(`[Lanzou Resolver] Fetching downpage/iframe url: ${iframeUrlStr}`);
+    const downPage = await robustRequest(iframeUrlStr, { headers: { 'Referer': urlStr } });
+    const downHtml = downPage.text;
+
+    const varValue = (varName: string) => {
+      const r = new RegExp(`var\\s+${varName}\\s*=\\s*['"]([^'"]+)['"]`, 'i');
+      const m = downHtml.match(r);
+      return m ? m[1] : '';
+    };
+
+    let sign = varValue('wsign') || varValue('ajaxback') || varValue('sign') || varValue('skid');
+    
+    if (!sign) {
+      const signRegex = /'sign'\s*:\s*'([^']+)'/i;
+      const m = downHtml.match(signRegex);
+      if (m) {
+        sign = m[1];
+      }
+    }
+    if (!sign) {
+      const signRegex = /"sign"\s*:\s*"([^"]+)"/i;
+      const m = downHtml.match(signRegex);
+      if (m) {
+        sign = m[1];
+      }
+    }
+
+    let pId = '';
+    const idMatches = [
+      /var\s+p_id\s*=\s*['"]([^'"]+)['"]/i,
+      /var\s+pkid\s*=\s*['"]([^'"]+)['"]/i,
+      /'id'\s*:\s*['"]([^'"]+)['"]/i,
+      /'id'\s*:\s*([a-zA-Z0-9_]+)/i
+    ];
+    for (const regex of idMatches) {
+      const m = downHtml.match(regex);
+      if (m) {
+        pId = m[1];
+        if (!pId.startsWith('i') && !/^\d+$/.test(pId)) {
+          pId = varValue(pId) || pId;
+        }
+        break;
+      }
+    }
+
+    if (!pId) {
+      try {
+        const urlParsed = new URL(iframeUrlStr);
+        pId = urlParsed.searchParams.get('id') || '';
+      } catch (pe) {
+        // ignore
+      }
+    }
+
+    console.log(`[Lanzou Resolver] Extracted sign: ${sign}, pId: ${pId}`);
+    if (sign) {
+      const ajaxUrlStr = iframeUrlStr.includes('/file/') 
+        ? new URL('/file/ajaxm.php', iframeUrlStr).toString()
+        : new URL('/ajaxm.php', iframeUrlStr).toString();
+      
+      console.log(`[Lanzou Resolver] Sending AJAX POST: ${ajaxUrlStr}`);
+      const payload = `action=downprocess&sign=${encodeURIComponent(sign)}&ves=1&id=${encodeURIComponent(pId)}&p=`;
+      
+      const ajaxResult = await new Promise<string>((resolve, reject) => {
+        const parsedAjaxUrl = new URL(ajaxUrlStr);
+        const isHttps = parsedAjaxUrl.protocol === 'https:';
+        const client = isHttps ? https : http;
+        
+        const reqOptions = {
+          method: 'POST',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
+            'Referer': iframeUrlStr,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json, text/javascript, */*'
+          }
+        };
+
+        const postReq = client.request(parsedAjaxUrl, reqOptions, (res) => {
+          const chunks: any[] = [];
+          res.on('data', (chunk) => chunks.push(chunk));
+          res.on('end', () => {
+            resolve(Buffer.concat(chunks).toString('utf-8'));
+          });
+        });
+        postReq.on('error', (err) => reject(err));
+        postReq.write(payload);
+        postReq.end();
+      });
+
+      console.log(`[Lanzou Resolver] AJAX response received: ${ajaxResult}`);
+      const ajaxJson = JSON.parse(ajaxResult);
+      if (ajaxJson && ajaxJson.zt === 1 && ajaxJson.dom && ajaxJson.url) {
+        const downloadUrl = `${ajaxJson.dom}/file/${ajaxJson.url}`;
+        console.log(`[Lanzou Resolver] Success! Direct download link is: ${downloadUrl}`);
+        return downloadUrl;
+      }
+    }
+  } catch (err: any) {
+    console.error(`[Lanzou Resolver] Parsing failed: ${err.message}`);
+  }
+  return urlStr;
 }
 
 function decodeHtmlEntities(str: string): string {
@@ -886,10 +1094,99 @@ function isPrivateIp(ip: string): boolean {
   return false;
 }
 
+// Global Keep-Alive Sockets to drastically optimize payload pipelines and prevent socket hang ups/resets
+const httpKeepAliveAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 150,
+  maxFreeSockets: 50,
+  timeout: 60000,
+});
+
+const httpsKeepAliveAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 150,
+  maxFreeSockets: 50,
+  timeout: 60000,
+  rejectUnauthorized: false
+});
+
+// Resilient Custom Public DNS Resolver for Chinese dynamic DNS and residential TVBox subscriptions
+function resolveHostWithFallback(hostname: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // 1. Try default container DNS resolution first
+    dns.lookup(hostname, { all: false }, (err, address) => {
+      if (!err && address) {
+        resolve(address);
+        return;
+      }
+      
+      console.log(`[DNS Fallback] Standard lookup failed for "${hostname}" (${err?.message}). Escalating to ultra-resilient public DNS...`);
+      
+      // 2. Fallback to public DNS servers (Alibaba, Tencent, Cloudflare, Google core DNS)
+      const resolver = new dns.Resolver();
+      resolver.setServers(['223.5.5.5', '119.29.29.29', '1.1.1.1', '8.8.8.8']);
+      resolver.resolve4(hostname, (resErr, addresses) => {
+        if (!resErr && addresses && addresses.length > 0) {
+          console.log(`[DNS Fallback] Dynamic resolution successful! "${hostname}" -> ${addresses[0]}`);
+          resolve(addresses[0]);
+        } else {
+          // If DNS absolutely cannot be resolved, reject with original or resolution error
+          reject(err || resErr || new Error(`DNS resolution failed for hostname: ${hostname}`));
+        }
+      });
+    });
+  });
+}
+
 function robustRequest(urlStr: string, options: any = {}): Promise<{ text: string, status: number, headers: any }> {
+  // Disable self-signed SSL errors globally to ensure maximum compatibility with tvbox subscription hosts
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
   return new Promise((resolve, reject) => {
     const maxRedirects = 5;
     let currentRedirects = 0;
+
+    // Helper to switch to native globalThis.fetch as a robust backup engine
+    async function tryFetchFallback(targetUrl: string, reason: string) {
+      console.warn(`[robustRequest] Custom HTTP engine failed (${reason}). Activating Fetch-Engine fallback for: ${targetUrl}`);
+      try {
+        const timeoutMs = options.timeout || 15000;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        const customHeaders: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
+          'Accept-Encoding': 'gzip, deflate, br',
+          ...options.headers
+        };
+
+        const response = await fetch(targetUrl, {
+          method: 'GET',
+          headers: customHeaders,
+          signal: controller.signal,
+          redirect: 'follow'
+        });
+
+        clearTimeout(timeoutId);
+
+        const text = await response.text();
+        const headersObj: Record<string, string> = {};
+        response.headers.forEach((val, name) => {
+          headersObj[name] = val;
+        });
+
+        console.log(`[robustRequest] Fetch-Engine fallback succeeded! Status: ${response.status}`);
+        resolve({
+          text,
+          status: response.status || 200,
+          headers: headersObj
+        });
+      } catch (fetchErr: any) {
+        console.error(`[robustRequest] Fetch-Engine fallback also failed: ${fetchErr.message || fetchErr}`);
+        reject(new Error(`Both HTTP engines failed: ${reason} / ${fetchErr.message}`));
+      }
+    }
 
     function execute(currentUrl: string) {
       try {
@@ -902,72 +1199,96 @@ function robustRequest(urlStr: string, options: any = {}): Promise<{ text: strin
 
         const hostname = parsedUrl.hostname;
 
-        dns.lookup(hostname, { all: false }, (dnsErr, address) => {
-          if (dnsErr) {
-            reject(new Error(`DNS resolution failed for hostname: ${hostname}`));
-            return;
-          }
-
-          if (isPrivateIp(address)) {
-            reject(new Error(`安全检测未通过：禁止访问局域网或本地 IP 地址 (${address})`));
-            return;
-          }
-
-          const isHttps = protocol === 'https:';
-          const client = isHttps ? https : http;
-          const agent = isHttps ? new https.Agent({ rejectUnauthorized: false }) : undefined;
-
-          const reqOptions = {
-            method: 'GET',
-            agent: agent,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
-              'Accept': 'application/json, text/plain, */*',
-              ...options.headers
-            },
-            timeout: options.timeout || 15000
-          };
-
-          const req = client.get(parsedUrl, reqOptions, (res) => {
-            if ([301, 302, 303, 307, 308].includes(res.statusCode || 0)) {
-              const location = res.headers.location;
-              if (location) {
-                currentRedirects++;
-                if (currentRedirects > maxRedirects) {
-                  reject(new Error('Too many redirects'));
-                  return;
-                }
-                const nextUrl = new URL(location, currentUrl).toString();
-                execute(nextUrl);
-                return;
-              }
+        resolveHostWithFallback(hostname)
+          .then((address) => {
+            if (isPrivateIp(address)) {
+              reject(new Error(`安全检测未通过：禁止访问局域网或本地 IP 地址 (${address})`));
+              return;
             }
 
-            const chunks: any[] = [];
-            res.on('data', (chunk) => {
-              chunks.push(chunk);
-            });
-            res.on('end', () => {
-              const buffer = Buffer.concat(chunks);
-              resolve({
-                text: buffer.toString('utf8'),
-                status: res.statusCode || 200,
-                headers: res.headers
+            const isHttps = protocol === 'https:';
+            const client = isHttps ? https : http;
+            const agent = isHttps ? httpsKeepAliveAgent : httpKeepAliveAgent;
+
+            const reqOptions = {
+              method: 'GET',
+              agent: agent,
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36',
+                'Accept': 'application/json, text/plain, */*',
+                'Accept-Encoding': 'gzip, deflate, br',
+                ...options.headers
+              },
+              timeout: options.timeout || 15000
+            };
+
+            const req = client.get(parsedUrl, reqOptions, (res) => {
+              if ([301, 302, 303, 307, 308].includes(res.statusCode || 0)) {
+                const location = res.headers.location;
+                if (location) {
+                  currentRedirects++;
+                  if (currentRedirects > maxRedirects) {
+                    reject(new Error('Too many redirects'));
+                    return;
+                  }
+                  const nextUrl = new URL(location, currentUrl).toString();
+                  execute(nextUrl);
+                  return;
+                }
+              }
+
+              const chunks: any[] = [];
+              res.on('data', (chunk) => {
+                chunks.push(chunk);
+              });
+              res.on('end', () => {
+                try {
+                  let buffer = Buffer.concat(chunks);
+                  const contentEncoding = (res.headers['content-encoding'] || '').toLowerCase();
+                  
+                  if (contentEncoding === 'gzip') {
+                    buffer = zlib.gunzipSync(buffer);
+                  } else if (contentEncoding === 'deflate') {
+                    buffer = zlib.inflateSync(buffer);
+                  } else if (contentEncoding === 'br') {
+                    buffer = zlib.brotliDecompressSync(buffer);
+                  }
+                  
+                  resolve({
+                    text: buffer.toString('utf8'),
+                    status: res.statusCode || 200,
+                    headers: res.headers
+                  });
+                } catch (decompressionErr: any) {
+                  console.error(`[robustRequest] Decompression failed: ${decompressionErr.message}`);
+                  try {
+                    const rawBuffer = Buffer.concat(chunks);
+                    resolve({
+                      text: rawBuffer.toString('utf8'),
+                      status: res.statusCode || 200,
+                      headers: res.headers
+                    });
+                  } catch (fallbackErr) {
+                    tryFetchFallback(currentUrl, `Decompression Failed: ${decompressionErr.message}`);
+                  }
+                }
               });
             });
-          });
 
-          req.on('error', (err) => {
-            reject(err);
-          });
+            req.on('error', (err: any) => {
+              tryFetchFallback(currentUrl, err.message || 'Socket connection reset');
+            });
 
-          req.on('timeout', () => {
-            req.destroy();
-            reject(new Error('Connection timeout (15s)'));
+            req.on('timeout', () => {
+              req.destroy();
+              tryFetchFallback(currentUrl, 'Connection timeout (15s)');
+            });
+          })
+          .catch((dnsErr) => {
+            tryFetchFallback(currentUrl, dnsErr.message || 'DNS resolution failed');
           });
-        });
-      } catch (err) {
-        reject(err);
+      } catch (err: any) {
+        tryFetchFallback(currentUrl, err.message || 'Execution error');
       }
     }
 
@@ -983,8 +1304,11 @@ app.get('/api/parse-tvbox', async (req, res) => {
     return;
   }
 
+  // Support Chinese characters in domain name (IDN like 毒盒.com / 饭太硬.com) and unencoded Chinese path parts safely
+  const compliantUrl = toCompliantUrl(url);
+
   // Normalize URL first (e.g. convert GitHub page to raw download url)
-  const normalizedUrl = normalizeTvBoxUrl(url);
+  let normalizedUrl = normalizeTvBoxUrl(compliantUrl);
 
   if (isPrivateUrl(normalizedUrl)) {
     res.status(400).json({
@@ -993,29 +1317,164 @@ app.get('/api/parse-tvbox', async (req, res) => {
     return;
   }
 
+  // 1. Detect and resolve Lanzou links first
+  if (/lanzou[a-z]\.com|lzs\.jp|lanzou\.com/i.test(normalizedUrl)) {
+    try {
+      console.log(`[TVBox Pre-processor] Resolving Lanzou link: ${normalizedUrl}`);
+      const directUrl = await resolveLanzouUrl(normalizedUrl);
+      if (directUrl && directUrl !== normalizedUrl) {
+        console.log(`[TVBox Pre-processor] Successfully resolved Lanzou direct url: ${directUrl}`);
+        normalizedUrl = directUrl;
+      }
+    } catch (lanzouErr: any) {
+      console.warn('[TVBox Pre-processor] Failed to resolve Lanzou URL', lanzouErr.message);
+    }
+  }
+
   try {
     console.log(`[TVBox Parser] Loading subscription from original: ${url} -> normalized: ${normalizedUrl}`);
 
-    const response = await robustRequest(normalizedUrl);
+    let response: any = null;
+    let fetchError: any = null;
+
+    // First try standard request
+    try {
+      response = await robustRequest(normalizedUrl);
+    } catch (err: any) {
+      console.warn(`[TVBox Parser] Standard fetch failed: ${err.message || err}`);
+      fetchError = err;
+    }
+
+    let rawText = '';
+    let isHtml = false;
+    let extractedText: string | null = null;
+
+    if (response) {
+      rawText = response.text || '';
+      const trimmedRaw = rawText.trim();
+      isHtml = trimmedRaw.startsWith('<') || trimmedRaw.toLowerCase().includes('<!doctype html') || trimmedRaw.toLowerCase().includes('<html');
+      if (isHtml) {
+        extractedText = extractConfigFromHtml(rawText);
+      }
+    }
+
+    // Try TVBox User-Agent Fallback if standard fetch failed, returned errors, or returned HTML with unextractable content.
+    // This bypasses anti-crawler protections on dedicated TVBox subscription services (like fty.333232.xyz, 毒盒.com, etc.).
+    if (!response || response.status < 200 || response.status >= 300 || (isHtml && !extractedText)) {
+      const okhttpUserAgents = [
+        'okhttp/3.15',
+        'okhttp/3.12.1',
+        'okhttp/4.9.0',
+        'okhttp/3.15.0'
+      ];
+      
+      console.log(`[TVBox Parser Fallback] Standalone/WAF block detected or request failed. Retrying with TVBox User-Agents sequentially...`);
+      
+      for (const ua of okhttpUserAgents) {
+        try {
+          console.log(`[TVBox Parser Fallback] Trying TVBox User-Agent: ${ua}...`);
+          const okHttpResponse = await robustRequest(normalizedUrl, {
+            headers: {
+              'User-Agent': ua,
+              'Accept': '*/*'
+            }
+          });
+          if (okHttpResponse && okHttpResponse.status === 200) {
+            const okText = okHttpResponse.text || '';
+            const trimmedOk = okText.trim();
+            const isOkHtml = trimmedOk.startsWith('<') || trimmedOk.toLowerCase().includes('<!doctype html') || trimmedOk.toLowerCase().includes('<html');
+            
+            let okExtracted: string | null = null;
+            if (isOkHtml) {
+              okExtracted = extractConfigFromHtml(okText);
+            }
+
+            if (!isOkHtml || okExtracted) {
+              console.log(`[TVBox Parser Fallback] Successfully fetched TVBox config using ${ua}!`);
+              response = okHttpResponse;
+              rawText = okText;
+              isHtml = isOkHtml;
+              extractedText = okExtracted;
+              fetchError = null;
+              break;
+            }
+          }
+        } catch (okHttpErr: any) {
+          console.warn(`[TVBox Parser Fallback] TVBox UA ${ua} fetch retry failed: ${okHttpErr.message || okHttpErr}`);
+        }
+      }
+    }
+
+    // 2. Fallback: If request failed, got bad status, or received HTML that couldn't be extracted,
+    // and it is a GitHub link, try various public raw proxies and mirrors.
+    const isGithub = normalizedUrl.includes('github.com') || normalizedUrl.includes('raw.githubusercontent.com');
+    if (isGithub && (!response || response.status < 200 || response.status >= 300 || (isHtml && !extractedText))) {
+      console.log(`[TVBox Parser Fallback] GitHub request issue detected. Trying stable mirror nodes...`);
+      const mirrors = [
+        normalizedUrl.replace('raw.githubusercontent.com', 'raw.gitmirror.com').replace('github.com', 'raw.gitmirror.com'),
+        normalizedUrl.replace('raw.githubusercontent.com', 'raw.githubusercontents.com').replace('github.com', 'raw.githubusercontents.com'),
+        normalizedUrl.startsWith('https://') 
+          ? 'https://ghproxy.net/' + normalizedUrl 
+          : 'https://ghproxy.net/https://' + normalizedUrl.replace('http://', ''),
+        normalizedUrl.startsWith('https://') 
+          ? 'https://mirror.ghproxy.com/' + normalizedUrl 
+          : 'https://mirror.ghproxy.com/https://' + normalizedUrl.replace('http://', '')
+      ];
+
+      for (const mirror of mirrors) {
+        try {
+          console.log(`[TVBox Parser Fallback] Trying mirror source: ${mirror}`);
+          const mirrorRes = await robustRequest(mirror);
+          if (mirrorRes && mirrorRes.status >= 200 && mirrorRes.status < 300) {
+            const mText = mirrorRes.text || '';
+            const trimmedM = mText.trim();
+            const isMirrorHtml = trimmedM.startsWith('<') || trimmedM.toLowerCase().includes('<!doctype html') || trimmedM.toLowerCase().includes('<html');
+            
+            if (isMirrorHtml) {
+              const ext = extractConfigFromHtml(mText);
+              if (ext) {
+                response = mirrorRes;
+                rawText = ext;
+                isHtml = false;
+                extractedText = ext;
+                fetchError = null;
+                console.log(`[TVBox Parser Fallback] Successfully parsed and extracted TVBox json from mirror HTML!`);
+                break;
+              }
+            } else {
+              response = mirrorRes;
+              rawText = mText;
+              isHtml = false;
+              extractedText = null;
+              fetchError = null;
+              console.log(`[TVBox Parser Fallback] Successfully retrieved mirror raw data!`);
+              break;
+            }
+          }
+        } catch (mirrorErr: any) {
+          console.warn(`[TVBox Parser Fallback] Mirror ${mirror} failed: ${mirrorErr.message}`);
+        }
+      }
+    }
+
+    if (!response) {
+      throw fetchError || new Error('无法连接目标服务器');
+    }
 
     if (response.status < 200 || response.status >= 300) {
        res.status(response.status).json({ error: `无法获取该TVBox订阅源 (HTTP 状态码: ${response.status})` });
        return;
     }
 
-    let rawText = response.text;
-    const trimmedRaw = rawText.trim();
-    if (trimmedRaw.startsWith('<') || trimmedRaw.toLowerCase().includes('<!doctype html') || trimmedRaw.toLowerCase().includes('<html')) {
-       // It returned HTML instead of raw ciphertext or raw JSON config. Try to extract
-       const extracted = extractConfigFromHtml(rawText);
-       if (extracted) {
-         rawText = extracted;
-       } else {
-         res.status(400).json({ 
-           error: `获取到的数据是 HTML 网页格式，而非可解析的 TVBox 订阅数据。原因可能是请求受到了人机/白名单防火墙拦截（如 Cloudflare）、或者是普通网页链接非直接下载直链。建议检查链接或使用旁边的【纯文本/本地文件导入】完成导入。` 
-         });
-         return;
-       }
+    if (isHtml && !extractedText) {
+       res.status(400).json({ 
+         error: `获取到的数据为 HTML 网页格式（如 Cloudflare 安全防护阻断、人机验证拦截或云存储分享界面），而非可解析的 TVBox 订阅数据。\n由于该节点有防御盾或下载受阻，您可以点击下方切换至【本地/纯文本导入】选项，只需将文件内容直接粘贴到文本框，即可绕开所有的网络屏障，100%成功秒级瞬间装载您的影视多源采集线！` 
+       });
+       return;
+    }
+
+    if (extractedText) {
+      rawText = extractedText;
     }
 
     const decodedText = decryptTvBoxConfig(rawText);
