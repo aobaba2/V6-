@@ -63,6 +63,21 @@ const getPopularity = (name: string): number => {
   return 1205 + (Math.abs(hash) % 8765); // popularity between 1205 and 9970
 };
 
+// Format seconds to readable MM:SS or HH:MM:SS format
+const formatProgressTime = (seconds: number): string => {
+  if (isNaN(seconds) || seconds < 0) return '00:00';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  
+  const pad = (num: number) => String(num).padStart(2, '0');
+  
+  if (h > 0) {
+    return `${pad(h)}:${pad(m)}:${pad(s)}`;
+  }
+  return `${pad(m)}:${pad(s)}`;
+};
+
 export default function App() {
   // Settings State loaded from server
   const [settings, setSettings] = useState<AppSettings>({
@@ -96,7 +111,7 @@ export default function App() {
   const [totalPages, setTotalPages] = useState<number>(1);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [activeTab, setActiveTab] = useState<'home' | 'admin'>('home');
-  const [navTab, setNavTab] = useState<'home' | 'tv' | 'movies' | 'new' | 'mylist' | 'iptv'>('home');
+  const [navTab, setNavTab] = useState<'home' | 'tv' | 'movies' | 'new' | 'mylist' | 'iptv' | 'history'>('home');
   const [adminTab, setAdminTab] = useState<'config' | 'guide' | 'iptv'>('config');
 
   // IPTV Live Stream State
@@ -458,8 +473,21 @@ export default function App() {
     epIdx: number,
     serverName: string,
     epName: string,
-    epUrl: string
+    epUrl: string,
+    progressTime?: number
   ) => {
+    // Preserve existing progressTime if they are playing the exact same episode and no new progress was specified
+    let finalProgress = progressTime;
+    const existing = watchHistory.find(item => String(item.id) === String(video.id));
+    if (existing && finalProgress === undefined) {
+      if (
+        existing.lastPlayedServerIndex === serverIdx &&
+        existing.lastPlayedEpisodeIndex === epIdx
+      ) {
+        finalProgress = existing.progressTime;
+      }
+    }
+
     const nextItem: WatchHistoryItem = {
       id: video.id,
       name: video.name,
@@ -474,6 +502,7 @@ export default function App() {
       lastPlayedEpisodeUrl: epUrl,
       lastPlayedServerIndex: serverIdx,
       lastPlayedEpisodeIndex: epIdx,
+      progressTime: finalProgress,
       updatedAt: Date.now(),
       content: video.content,
       year: video.year,
@@ -488,6 +517,31 @@ export default function App() {
       const updated = [nextItem, ...filtered].slice(0, 30);
       localStorage.setItem('watchHistory', JSON.stringify(updated));
       return updated;
+    });
+  };
+
+  const handlePlayerTimeUpdate = (currentTime: number) => {
+    if (!currentVideo) return;
+    
+    setWatchHistory(prev => {
+      let isModified = false;
+      const updated = prev.map(item => {
+        if (String(item.id) === String(currentVideo.id)) {
+          isModified = true;
+          return {
+            ...item,
+            progressTime: Math.floor(currentTime),
+            updatedAt: Date.now()
+          };
+        }
+        return item;
+      });
+      
+      if (isModified) {
+        localStorage.setItem('watchHistory', JSON.stringify(updated));
+        return updated;
+      }
+      return prev;
     });
   };
 
@@ -662,22 +716,58 @@ export default function App() {
           const serverData = (await res.json()) as AppSettings;
           
           if (localSettings) {
-            // Merge server configurations with local configuration to preserve custom resources user added
-            const mergedCmsSources = [...serverData.cmsSources];
+            // Merge server configurations with local configuration, respecting user deletions
+            const defaultSourceIds = ['ffzy', 'bdzy', 'hhzy', 'bfzy', 'wlzy', 'wlzyapi'];
+            const localCmsIds = Array.isArray(localSettings.cmsSources) ? localSettings.cmsSources.map(s => s.id) : [];
+            
+            // Filter out default sources from server configuration that the user has deleted in their local settings
+            const mergedCmsSources = serverData.cmsSources.filter(serverSrc => {
+              const isDefault = defaultSourceIds.includes(serverSrc.id) || 
+                                serverSrc.url.includes('ffzyapi.com') || 
+                                serverSrc.url.includes('apibdzy.com') ||
+                                serverSrc.url.includes('hhzyapi.com') ||
+                                serverSrc.url.includes('bfzyapi.com') ||
+                                serverSrc.url.includes('wlzyapi.com');
+              if (isDefault) {
+                return localCmsIds.includes(serverSrc.id) || 
+                       (Array.isArray(localSettings.cmsSources) && 
+                        localSettings.cmsSources.some(ls => ls.url === serverSrc.url));
+              }
+              return true;
+            });
+
+            // Append custom sources present in local settings but missing in server configuration
             if (Array.isArray(localSettings.cmsSources)) {
               localSettings.cmsSources.forEach(localSrc => {
-                const isDuplicate = mergedCmsSources.some(s => s.id === localSrc.id || s.url === localSrc.url);
-                if (!isDuplicate) {
+                const isAlreadyPresent = mergedCmsSources.some(s => s.id === localSrc.id || s.url === localSrc.url);
+                if (!isAlreadyPresent) {
                   mergedCmsSources.push(localSrc);
                 }
               });
             }
 
-            const mergedParsers = [...serverData.m3u8Parsers];
+            const defaultParserIds = ['xmflv', 'jsonplayer', 'aidouer'];
+            const localParserIds = Array.isArray(localSettings.m3u8Parsers) ? localSettings.m3u8Parsers.map(p => p.id) : [];
+
+            // Filter out default parsers from server configuration that the user has deleted
+            const mergedParsers = serverData.m3u8Parsers.filter(serverParser => {
+              const isDefault = defaultParserIds.includes(serverParser.id) ||
+                                serverParser.url.includes('xmflv.cc') ||
+                                serverParser.url.includes('jsonplayer.com') ||
+                                serverParser.url.includes('aidouer.net');
+              if (isDefault) {
+                return localParserIds.includes(serverParser.id) ||
+                       (Array.isArray(localSettings.m3u8Parsers) &&
+                        localSettings.m3u8Parsers.some(lp => lp.url === serverParser.url));
+              }
+              return true;
+            });
+
+            // Append custom parsers present in local settings but missing in server configuration
             if (Array.isArray(localSettings.m3u8Parsers)) {
               localSettings.m3u8Parsers.forEach(localParser => {
-                const isDuplicate = mergedParsers.some(p => p.id === localParser.id || p.url === localParser.url);
-                if (!isDuplicate) {
+                const isAlreadyPresent = mergedParsers.some(p => p.id === localParser.id || p.url === localParser.url);
+                if (!isAlreadyPresent) {
                   mergedParsers.push(localParser);
                 }
               });
@@ -875,7 +965,7 @@ export default function App() {
         const separator = directUrl.includes('?') ? '&' : '?';
         directUrl += `${separator}pg=${page}`;
         if (keyword) {
-          directUrl += `&wd=${encodeURIComponent(keyword)}&ac=list`;
+          directUrl += `&wd=${encodeURIComponent(keyword)}&ac=videolist`;
         } else if (categoryId) {
           directUrl += `&t=${categoryId}&ac=videolist`;
         } else {
@@ -888,7 +978,7 @@ export default function App() {
         usedProxy = true;
         let queryUrl = `/api/cms-proxy?url=${encodeURIComponent(cmsUrl)}&pg=${page}`;
         if (keyword) {
-          queryUrl += `&wd=${encodeURIComponent(keyword)}&ac=list`;
+          queryUrl += `&wd=${encodeURIComponent(keyword)}&ac=videolist`;
         } else if (categoryId) {
           queryUrl += `&t=${categoryId}&ac=videolist`;
         } else {
@@ -916,7 +1006,7 @@ export default function App() {
           const separator = directUrl.includes('?') ? '&' : '?';
           directUrl += `${separator}pg=${page}`;
           if (keyword) {
-            directUrl += `&wd=${encodeURIComponent(keyword)}&ac=list`;
+            directUrl += `&wd=${encodeURIComponent(keyword)}&ac=videolist`;
           } else if (categoryId) {
             directUrl += `&t=${categoryId}&ac=videolist`;
           } else {
@@ -1158,7 +1248,7 @@ export default function App() {
   };
 
   // Parse play urls of chosen movie according to splitting rules
-  const parsePlayData = (video: VideoItem) => {
+  const parsePlayData = (video: VideoItem, autoPlay = false) => {
     const splitServ = settings.rules.splitPlayServer || '$$$';
     const splitEp = settings.rules.splitPlayEpisode || '#';
     const splitNameUrl = settings.rules.splitPlayNameAndUrl || '$';
@@ -1221,24 +1311,26 @@ export default function App() {
       setCurrentEpisodeIndex(targetEpisodeIdx);
       setCurrentPlayUrl(parsed[targetServerIdx].episodes[targetEpisodeIdx].url);
       
-      saveWatchHistory(
-        video,
-        targetServerIdx,
-        targetEpisodeIdx,
-        parsed[targetServerIdx].name,
-        parsed[targetServerIdx].episodes[targetEpisodeIdx].name,
-        parsed[targetServerIdx].episodes[targetEpisodeIdx].url
-      );
+      if (autoPlay) {
+        saveWatchHistory(
+          video,
+          targetServerIdx,
+          targetEpisodeIdx,
+          parsed[targetServerIdx].name,
+          parsed[targetServerIdx].episodes[targetEpisodeIdx].name,
+          parsed[targetServerIdx].episodes[targetEpisodeIdx].url
+        );
+      }
     } else {
       setCurrentPlayUrl('');
       showToast('未能从所选播放字段解析到合规链接。请检查您在自定义规则中设置的符号。', 'info');
     }
   };
 
-  const handleSelectVideo = (video: VideoItem) => {
+  const handleSelectVideo = (video: VideoItem, autoPlay = false) => {
     setCurrentVideo(video);
-    setIsPlaying(false);
-    parsePlayData(video);
+    setIsPlaying(autoPlay);
+    parsePlayData(video, autoPlay);
     // Scroll smoothly to player
     const target = document.getElementById('active-player-room') || document.getElementById('main-content-flow');
     if (target) {
@@ -1334,7 +1426,16 @@ export default function App() {
       <header className="h-16 flex items-center justify-between px-4 sm:px-10 bg-[#090909]/95 backdrop-blur-md border-b border-zinc-900 sticky top-0 z-40 shadow-2xl transition duration-300">
         <div className="flex items-center space-x-6 sm:space-x-10">
           {/* Logo brand resembling the photo */}
-          <div className="flex items-center space-x-1.5 cursor-pointer" onClick={() => { setActiveTab('home'); setNavTab('home'); setSelectedCategoryId(''); setSearchKeyword(''); }}>
+          <div className="flex items-center space-x-1.5 cursor-pointer" onClick={() => {
+            setActiveTab('home');
+            setNavTab('home');
+            setSelectedCategoryId('');
+            setSearchKeyword('');
+            setCurrentVideo(null);
+            setIsPlaying(false);
+            setCurrentPage(1);
+            document.getElementById('main-content-flow')?.scrollTo({ top: 0, behavior: 'smooth' });
+          }}>
             <span className="h-8.5 w-8.5 bg-red-650 text-white rounded-sm flex items-center justify-center font-display font-bold text-sm shadow-lg border border-red-700/20">
               赛
             </span>
@@ -1346,11 +1447,28 @@ export default function App() {
           {/* Desktop Navigation Tabs - exact replication of photo items */}
           <nav className="hidden md:flex space-x-5 text-sm font-semibold text-zinc-350">
             <button
-              onClick={() => { setActiveTab('home'); setNavTab('iptv'); }}
-              className={`hover:text-red-500 transition-all cursor-pointer text-[13px] flex items-center space-x-1 ${activeTab === 'home' && navTab === 'iptv' ? 'text-red-550 font-bold' : ''}`}
+              onClick={() => {
+                setActiveTab('home');
+                setNavTab('iptv');
+                setCurrentVideo(null);
+                setIsPlaying(false);
+              }}
+              className={`hover:text-red-500 transition-all cursor-pointer text-[13px] flex items-center space-x-1 ${activeTab === 'home' && navTab === 'iptv' ? 'text-red-500 font-bold' : ''}`}
             >
               <Radio className="h-3.5 w-3.5 animate-pulse text-red-500" />
               <span>电视直播</span>
+            </button>
+            <button
+              onClick={() => {
+                setActiveTab('home');
+                setNavTab('history');
+                setCurrentVideo(null);
+                setIsPlaying(false);
+              }}
+              className={`hover:text-red-500 transition-all cursor-pointer text-[13px] flex items-center space-x-1 ${activeTab === 'home' && navTab === 'history' ? 'text-red-500 font-bold' : ''}`}
+            >
+              <History className="h-3.5 w-3.5 text-zinc-400" />
+              <span>最近观看</span>
             </button>
             <button
               onClick={() => { setActiveTab('admin'); }}
@@ -1368,11 +1486,18 @@ export default function App() {
             type="button" 
             onClick={() => {
               setActiveTab('home');
-              const searchElem = document.getElementById('search-input-field');
-              if (searchElem) {
-                searchElem.scrollIntoView({ behavior: 'smooth' });
-                searchElem.focus();
-              }
+              setNavTab('home');
+              setCurrentVideo(null);
+              setIsPlaying(false);
+              
+              // Delay execution slightly to allow React DOM update if details panel was open
+              setTimeout(() => {
+                const searchElem = document.getElementById('search-input-field');
+                if (searchElem) {
+                  searchElem.scrollIntoView({ behavior: 'smooth' });
+                  searchElem.focus();
+                }
+              }, 60);
             }}
             className="text-zinc-400 hover:text-white transition cursor-pointer p-1"
           >
@@ -1417,11 +1542,28 @@ export default function App() {
       {/* MOBILE HEADER BUTTONS */}
       <div className="md:hidden flex bg-[#0c0c0c] px-2 py-2.5 justify-around border-b border-zinc-900 text-xs font-medium text-zinc-400">
         <button
-          onClick={() => { setActiveTab('home'); setNavTab('iptv'); }}
+          onClick={() => {
+            setActiveTab('home');
+            setNavTab('iptv');
+            setCurrentVideo(null);
+            setIsPlaying(false);
+          }}
           className={`px-3 py-1 flex items-center space-x-0.5 cursor-pointer transition ${activeTab === 'home' && navTab === 'iptv' ? 'text-red-500 font-extrabold' : ''}`}
         >
           <Radio className="h-3 w-3 animate-pulse text-red-500" />
           <span>直播</span>
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab('home');
+            setNavTab('history');
+            setCurrentVideo(null);
+            setIsPlaying(false);
+          }}
+          className={`px-3 py-1 flex items-center space-x-0.5 cursor-pointer transition ${activeTab === 'home' && navTab === 'history' ? 'text-red-500 font-extrabold' : ''}`}
+        >
+          <History className="h-3 w-3 text-red-500" />
+          <span>最近观看</span>
         </button>
         <button
           onClick={() => { setActiveTab('admin'); }}
@@ -1443,7 +1585,7 @@ export default function App() {
             <div className="space-y-6">
               
                {/* HERO SHOWCASE SPOTLIGHT BANNER (resembles STARFALL banner from photo) */}
-              {!currentVideo && (() => {
+              {!currentVideo && navTab !== 'history' && (() => {
                 const candidates = getFeaturedCandidates();
                 const highlight = candidates[activeHeroIndex] || candidates[0];
                 return (
@@ -1509,7 +1651,7 @@ export default function App() {
                         <button
                           onClick={() => {
                             if (highlight.realItem) {
-                              handleSelectVideo(highlight.realItem);
+                              handleSelectVideo(highlight.realItem, true);
                             } else {
                               showToast('星陨战纪 (STARFALL) 是一部独家影视推荐。请加载下方线路开始探索电影库。', 'info');
                             }
@@ -1606,52 +1748,64 @@ export default function App() {
                         </button>
                       </div>
 
-                      <VideoPlayer
-                        playUrl={currentPlayUrl}
-                        title={currentVideo.name}
-                        episodeName={parsedServers[currentServerIndex]?.episodes[currentEpisodeIndex]?.name || '正片'}
-                        parser={currentParserObject}
-                        onNavigateEpisode={handleEpisodeNavigation}
-                        hasPrev={currentEpisodeIndex > 0}
-                        hasNext={
-                          parsedServers[currentServerIndex]
-                            ? currentEpisodeIndex < parsedServers[currentServerIndex].episodes.length - 1
-                            : false
-                        }
-                      />
+                      {(() => {
+                        const historyItem = watchHistory.find(
+                          h => String(h.id) === String(currentVideo.id) &&
+                               h.lastPlayedServerIndex === currentServerIndex &&
+                               h.lastPlayedEpisodeIndex === currentEpisodeIndex
+                        );
+                        const initialTime = historyItem ? historyItem.progressTime : 0;
+                        
+                        return (
+                          <VideoPlayer
+                            playUrl={currentPlayUrl}
+                            title={currentVideo.name}
+                            episodeName={parsedServers[currentServerIndex]?.episodes[currentEpisodeIndex]?.name || '正片'}
+                            parser={currentParserObject}
+                            onNavigateEpisode={handleEpisodeNavigation}
+                            hasPrev={currentEpisodeIndex > 0}
+                            hasNext={
+                              parsedServers[currentServerIndex]
+                                ? currentEpisodeIndex < parsedServers[currentServerIndex].episodes.length - 1
+                                : false
+                            }
+                            initialTime={initialTime}
+                            onTimeUpdate={handlePlayerTimeUpdate}
+                          />
+                        );
+                      })()}
                     </div>
                   ) : (
-                    /* Cinematic landscape poster header */
-                    <div className="relative w-full h-[100px] sm:h-[150px] md:h-[180px] overflow-hidden bg-zinc-900/60 shrink-0 select-none z-10">
+                    /* Cinematic top bar navigation */
+                    <div className="relative w-full h-[54px] sm:h-[60px] overflow-hidden bg-zinc-900/40 border-b border-zinc-900/30 flex items-center justify-between px-4 shrink-0 select-none z-10">
                       <img
                         src={currentVideo.pic || "https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=600"}
                         alt=""
                         referrerPolicy="no-referrer"
-                        className="absolute inset-0 w-full h-full object-cover blur-xl opacity-25 saturate-125 scale-105"
+                        className="absolute inset-0 w-full h-full object-cover blur-xl opacity-20 saturate-125 scale-105"
                         onError={(e) => {
                           const target = e.target as HTMLImageElement;
                           target.src = 'https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=600';
                         }}
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/50 to-transparent" />
                       
-                      {/* Top left page back controls */}
-                      <div className="absolute top-4 left-4 z-20">
+                      {/* Left: page back controls */}
+                      <div className="z-20">
                         <button
                           onClick={() => {
                             setCurrentVideo(null);
                             setCurrentPlayUrl('');
                             setIsPlaying(false);
                           }}
-                          className="inline-flex items-center space-x-1.5 px-3 py-2 bg-zinc-900/80 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 hover:text-white rounded-xl text-xs font-bold transition active:scale-95 shadow-lg backdrop-blur-xs cursor-pointer"
+                          className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 hover:text-white rounded-lg text-xs font-bold transition active:scale-95 shadow-sm backdrop-blur-xs cursor-pointer"
                         >
-                          <ChevronLeft className="h-4 w-4" />
+                          <ChevronLeft className="h-3.5 w-3.5" />
                           <span>返回影片列表</span>
                         </button>
                       </div>
 
-                      {/* Top right spec badges: 4K, HDR, Dolby */}
-                      <div className="absolute top-4 right-4 z-20 flex items-center space-x-1.5">
+                      {/* Right: spec badges: 4K, HDR, Dolby */}
+                      <div className="z-20 flex items-center space-x-1.5">
                         <span className="text-[9px] font-bold tracking-wider font-mono bg-amber-500/90 text-zinc-950 px-2 py-0.5 rounded shadow-sm">
                           4K ULTRA
                         </span>
@@ -1666,7 +1820,7 @@ export default function App() {
                   )}
 
                   {/* Part 2: POSTER METADATA AND DESCRIPTION ROW */}
-                  <div className="px-5 pb-6 sm:px-10 sm:pb-10 relative text-left z-10 flex flex-col space-y-5">
+                  <div className="pt-5 sm:pt-6 px-5 pb-6 sm:px-10 sm:pb-10 relative text-left z-10 flex flex-col space-y-5">
                     {/* Top Portion: Title, Year and Film Badges */}
                     <div className="border-b border-zinc-900/80 pb-4.5 space-y-3">
                       <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 justify-center md:justify-start">
@@ -1787,6 +1941,20 @@ export default function App() {
                         <button
                           onClick={() => {
                             setIsPlaying(true);
+                            if (currentVideo && parsedServers[currentServerIndex]) {
+                              const server = parsedServers[currentServerIndex];
+                              const ep = server.episodes[currentEpisodeIndex];
+                              if (ep) {
+                                saveWatchHistory(
+                                  currentVideo,
+                                  currentServerIndex,
+                                  currentEpisodeIndex,
+                                  server.name,
+                                  ep.name,
+                                  ep.url
+                                );
+                              }
+                            }
                             const target = document.getElementById('active-player-room');
                             if (target) {
                               target.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1910,22 +2078,24 @@ export default function App() {
               )}
 
               {/* SEARCH FILTER WRAPPER */}
-              <SearchAndFilter
-                categories={categories}
-                selectedCategoryId={selectedCategoryId}
-                onSelectCategory={(id) => {
-                  setSelectedCategoryId(id);
-                  setCurrentPage(1); // reset to page 1
-                }}
-                onSearch={(keyword) => {
-                  setSearchKeyword(keyword);
-                  setCurrentPage(1); // reset to page 1
-                }}
-                currentSearch={searchKeyword}
-              />
+              {!currentVideo && navTab !== 'history' && (
+                <SearchAndFilter
+                  categories={categories}
+                  selectedCategoryId={selectedCategoryId}
+                  onSelectCategory={(id) => {
+                    setSelectedCategoryId(id);
+                    setCurrentPage(1); // reset to page 1
+                  }}
+                  onSearch={(keyword) => {
+                    setSearchKeyword(keyword);
+                    setCurrentPage(1); // reset to page 1
+                  }}
+                  currentSearch={searchKeyword}
+                />
+              )}
 
               {/* FAVORITES PLATFORM */}
-              {favorites.length > 0 && (
+              {!currentVideo && navTab !== 'history' && favorites.length > 0 && (
                 <div className="bg-[#121212] rounded-2xl border border-zinc-900 p-4 sm:p-5 shadow-xl space-y-3.5" id="favorites-panel">
                   <div className="flex items-center justify-between border-b border-zinc-850 pb-2.5">
                     <div className="flex items-center space-x-2">
@@ -1971,15 +2141,15 @@ export default function App() {
                         </div>
 
                         {/* Text detail */}
-                        <div className="flex-1 min-w-0 flex flex-col justify-center whitespace-nowrap">
+                        <div className="flex-1 min-w-0 flex flex-col justify-center whitespace-nowrap text-left">
                           <h4 className="text-xs font-bold text-zinc-150 group-hover:text-red-500 transition truncate" title={item.name}>
                             {item.name}
                           </h4>
                           <p className="text-[10px] text-zinc-500 truncate">
                             {item.category || '电影'} · {item.remarks || '极清'}
                           </p>
-                          <div className="mt-1 text-[9px] text-red-500 font-semibold flex items-center space-x-0.5">
-                            <Star className="h-2.5 w-2.5 fill-red-500 text-red-500" />
+                          <div className="mt-1 text-[9px] text-red-550 font-semibold flex items-center space-x-0.5">
+                            <Star className="h-2.5 w-2.5 fill-red-550 text-red-555" />
                             <span>评分: {getRating(item.name)}</span>
                           </div>
                         </div>
@@ -1995,7 +2165,7 @@ export default function App() {
                             });
                             showToast('已移出收藏片单', 'info');
                           }}
-                          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-500 hover:bg-red-950/35 transition shadow-sm opacity-0 group-hover:opacity-100"
+                          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-red-500 hover:bg-red-950/35 transition shadow-sm opacity-0 group-hover:opacity-100 cursor-pointer"
                           title="移出收藏"
                         >
                           <X className="h-3 w-3" />
@@ -2004,196 +2174,488 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-              )}
-
-              {/* WATCH HISTORY PORTAL */}
-              {watchHistory.length > 0 && (
-                <div className="bg-[#121212] rounded-2xl border border-zinc-900 p-4 sm:p-5 shadow-xl space-y-3.5" id="watch-history-panel">
-                  <div className="flex items-center justify-between border-b border-zinc-850 pb-2.5">
+              )}              {/* WATCH HISTORY PORTAL - ONLY SHOWN WHEN navTab IS 'history' */}
+              {!currentVideo && navTab === 'history' && (
+                <div className="bg-[#121212] rounded-2xl border border-zinc-900 p-4 sm:p-6 shadow-xl space-y-5" id="watch-history-panel">
+                  <div className="flex items-center justify-between border-b border-zinc-850 pb-3">
                     <div className="flex items-center space-x-2">
-                      <History className="h-4 w-4 text-red-500 animate-pulse" />
-                      <span className="text-xs sm:text-sm font-bold text-zinc-100">极速续播通道 / 我的播放历史</span>
-                      <span className="text-[10px] bg-red-950 text-red-400 px-2.5 py-0.5 rounded-full font-bold border border-red-900/30">
+                      <History className="h-5 w-5 text-red-500 animate-pulse" />
+                      <span className="text-sm sm:text-base font-bold text-zinc-100 font-sans">最近观看 / 播放足迹</span>
+                      <span className="text-xs bg-red-950 text-red-400 px-2.5 py-0.5 rounded-full font-bold border border-red-900/30 font-mono">
                         {watchHistory.length}
                       </span>
                     </div>
-                    <button
-                      onClick={handleClearAllHistory}
-                      className="text-[10px] text-red-500 hover:text-red-600 font-bold hover:underline transition flex items-center space-x-1 border border-zinc-800 hover:border-zinc-700 px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-red-950/20 shadow-sm"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                      <span>清空历史</span>
-                    </button>
-                  </div>
-
-                  {/* Scrollable container */}
-                  <div className="flex gap-3.5 overflow-x-auto pb-1.5 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
-                    {watchHistory.map((item) => (
-                      <div
-                        key={item.id}
-                        onClick={() => handleResumeHistory(item)}
-                        className="relative min-w-[240px] max-w-[280px] flex-none bg-zinc-900/40 hover:bg-red-950/5 border border-zinc-900 hover:border-red-900/40 rounded-xl p-2.5 flex gap-3 cursor-pointer transition duration-200 group"
+                    {watchHistory.length > 0 && (
+                      <button
+                        onClick={handleClearAllHistory}
+                        className="text-xs text-red-500 hover:text-red-600 font-bold hover:underline transition flex items-center space-x-1 border border-zinc-800 hover:border-zinc-700 px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-red-950/20 shadow-sm cursor-pointer"
                       >
-                        {/* Film pic */}
-                        <div className="relative w-12 h-16 rounded-md overflow-hidden bg-zinc-950 shadow-sm shrink-0">
-                          <img
-                            src={item.pic || "https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=200"}
-                            alt={item.name}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
-                            onError={(e) => {
-                              const target = e.target as HTMLImageElement;
-                              target.src = 'https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=200';
-                            }}
-                          />
-                        </div>
-
-                        {/* Text detail */}
-                        <div className="flex-1 min-w-0 flex flex-col justify-between whitespace-nowrap">
-                          <div className="space-y-0.5">
-                            <h4 className="text-xs font-bold text-zinc-150 group-hover:text-red-500 transition truncate" title={item.name}>
-                              {item.name}
-                            </h4>
-                            <p className="text-[10px] text-zinc-500 truncate">
-                              [{item.category || '电影'}] · {item.remarks || 'HD'}
-                            </p>
-                          </div>
-
-                          <div className="space-y-0.5">
-                            <div className="text-[10px] text-red-400 bg-red-950/40 border border-red-900/25 rounded px-1.5 py-0.5 inline-block font-sans font-semibold truncate max-w-full">
-                              上次播到: {item.lastPlayedEpisodeName}
-                            </div>
-                            <div className="text-[9px] text-red-500 font-bold group-hover:underline flex items-center space-x-0.5">
-                              <span>⚡ 极速一键续播</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Individual close action */}
-                        <button
-                          onClick={(e) => handleDeleteHistory(item.id, e)}
-                          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-red-500 hover:bg-red-950/35 transition shadow-sm opacity-0 group-hover:opacity-100"
-                          title="删除记录"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ))}
+                        <Trash2 className="h-3.5 w-3.5" />
+                        <span>清空历史</span>
+                      </button>
+                    )}
                   </div>
+
+                  {watchHistory.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-zinc-500 space-y-3 bg-zinc-900/10 border border-zinc-900/35 rounded-2xl">
+                      <History className="h-10 w-10 text-zinc-700 font-bold" />
+                      <p className="text-sm font-semibold">您目前暂无观影足迹，快去首页挑选大片放映吧</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                      {watchHistory.map((item) => (
+                        <div
+                          key={item.id}
+                          onClick={() => handleResumeHistory(item)}
+                          className="relative bg-zinc-900/30 hover:bg-red-950/5 border border-zinc-900 hover:border-red-900/40 rounded-xl p-3 flex gap-3.5 cursor-pointer transition duration-300 group shadow-md"
+                        >
+                          {/* Film pic */}
+                          <div className="relative w-14 h-20 rounded-lg overflow-hidden bg-zinc-950 shadow-sm shrink-0 border border-zinc-800/40">
+                            <img
+                              src={item.pic || "https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=200"}
+                              alt={item.name}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover transition duration-300 group-hover:scale-105"
+                              onError={(e) => {
+                                const target = e.target as HTMLImageElement;
+                                target.src = 'https://images.unsplash.com/photo-1542204172-e7052809a862?auto=format&fit=crop&q=80&w=200';
+                              }}
+                            />
+                          </div>
+
+                          {/* Text detail */}
+                          <div className="flex-1 min-w-0 flex flex-col justify-between whitespace-nowrap text-left py-0.5">
+                            <div className="space-y-1">
+                              <h4 className="text-sm font-bold text-zinc-150 group-hover:text-red-500 transition truncate" title={item.name}>
+                                {item.name}
+                              </h4>
+                              <p className="text-[11px] text-zinc-500 truncate">
+                                [{item.category || '电影'}] · {item.remarks || 'HD'}
+                              </p>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <div className="text-[11px] text-red-300 bg-red-950/55 border border-red-900/30 rounded px-2 py-0.5 inline-block font-sans font-semibold truncate max-w-full">
+                                观看至: {item.lastPlayedEpisodeName}
+                                {item.progressTime ? ` (${formatProgressTime(item.progressTime)})` : ''}
+                              </div>
+                              <div className="text-[10px] text-red-500 font-bold group-hover:underline flex items-center space-x-0.5">
+                                <span>⚡ 一键续播 &rarr;</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Individual close action */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteHistory(item.id, e);
+                            }}
+                            className="absolute top-2 right-2 p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-500 hover:text-red-500 hover:bg-red-950/35 transition shadow-sm opacity-0 group-hover:opacity-100 cursor-pointer"
+                            title="删除记录"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* VIDEO GRID & COLLECTION COUNTERS */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <h3 className="text-base font-bold tracking-tight text-zinc-100">
-                      {searchKeyword ? `🔍 "${searchKeyword}" 的搜索结果` : '🎥 最新影视资源库'}
-                    </h3>
-                    <p className="text-xs text-zinc-500">
-                      数据源：<span className="text-zinc-350 font-semibold">[{settings.cmsSources.find(c => c.id === settings.selectedCmsId)?.name || '默认'}]</span>
-                      ，共采集到约 <span className="text-red-500 font-extrabold font-mono">{totalCount}</span> 部影片资源
-                    </p>
-                  </div>
-                  
-                  {/* Quick Reload/Refresh Button */}
-                  <button
-                    onClick={() => {
-                      const curCms = settings.cmsSources.find(c => c.id === settings.selectedCmsId);
-                      if (curCms) fetchVideosFromCms(curCms.url, currentPage, selectedCategoryId, searchKeyword, true);
-                      showToast('数据重载成功');
-                    }}
-                    className="p-2 bg-zinc-900 border border-zinc-800 rounded-lg hover:bg-zinc-800 text-zinc-300 hover:text-white transition shadow-md flex items-center space-x-1.5 text-xs font-bold cursor-pointer"
-                    title="刷新当前列表"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">刷新列表</span>
-                  </button>
-                </div>
+              {!currentVideo && navTab !== 'history' && (
+                (() => {
+                const isCategorizedView = 
+                  activeTab === 'home' && 
+                  navTab === 'home' && 
+                  !searchKeyword && 
+                  !selectedCategoryId && 
+                  currentPage === 1;
 
-                {loadingVideos ? (
-                  /* Elegant skeletal loader grid */
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4" id="grid-loader">
-                    {[...Array(12)].map((_, index) => (
-                      <div key={index} className="bg-[#141414] rounded-xl border border-zinc-900 overflow-hidden flex flex-col space-y-3 animate-pulse h-72">
-                        <div className="aspect-[3/4] bg-zinc-905 w-full" />
-                        <div className="p-3 space-y-2">
-                          <div className="h-3.5 bg-zinc-800 rounded-sm w-3/4" />
-                          <div className="h-3 bg-zinc-850 rounded-sm w-1/2" />
+                const getCategorizedVideos = (list: VideoItem[]) => {
+                  const movie: VideoItem[] = [];
+                  const serial: VideoItem[] = [];
+                  const variety: VideoItem[] = [];
+                  const anime: VideoItem[] = [];
+                  const other: VideoItem[] = [];
+
+                  list.forEach((item) => {
+                    const cat = (item.category || '').toLowerCase();
+                    if (
+                      cat.includes('电影') ||
+                      cat.includes('片') ||
+                      cat.includes('movie') ||
+                      cat === '电影'
+                    ) {
+                      movie.push(item);
+                    } else if (
+                      cat.includes('动漫') ||
+                      cat.includes('动画') ||
+                      cat.includes('anime')
+                    ) {
+                      anime.push(item);
+                    } else if (
+                      cat.includes('综艺') ||
+                      cat.includes('娱乐') ||
+                      cat.includes('show') ||
+                      cat.includes('晚会') ||
+                      cat.includes('真人秀')
+                    ) {
+                      variety.push(item);
+                    } else if (
+                      cat.includes('剧') ||
+                      cat.includes('连续剧') ||
+                      cat.includes('电视剧') ||
+                      cat.includes('系列') ||
+                      cat.includes('tv')
+                    ) {
+                      serial.push(item);
+                    } else {
+                      other.push(item);
+                    }
+                  });
+
+                  return { movie, serial, variety, anime, other };
+                };
+
+                const getHeaderTitle = () => {
+                  if (searchKeyword) {
+                    return `🔍 "${searchKeyword}" 的搜索结果`;
+                  }
+                  if (selectedCategoryId) {
+                    const catName = categories.find(c => String(c.id) === String(selectedCategoryId))?.name;
+                    return catName ? `📂 ${catName}专区` : '🎥 影视分类资源';
+                  }
+                  if (navTab === 'movies') {
+                    return '🎬 电影大片专区';
+                  }
+                  if (navTab === 'tv') {
+                    return '📺 连续剧集专区';
+                  }
+                  if (navTab === 'new') {
+                    return '🔥 最新上映专区';
+                  }
+                  if (navTab === 'mylist') {
+                    return '❤️ 我的至臻收藏';
+                  }
+                  return '🎥 影视资源库';
+                };
+
+                return (
+                  <div className="space-y-6">
+                    {!isCategorizedView && (
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-0.5">
+                          <h3 className="text-base font-bold tracking-tight text-zinc-100">
+                            {getHeaderTitle()}
+                          </h3>
+                          <p className="text-xs text-zinc-500">
+                            数据源：<span className="text-zinc-350 font-semibold">[{settings.cmsSources.find(c => c.id === settings.selectedCmsId)?.name || '默认'}]</span>
+                            ，共采集到约 <span className="text-red-500 font-extrabold font-mono">{totalCount}</span> 部影片资源
+                          </p>
+                        </div>
+                        
+                        {/* Quick Reload/Refresh Button */}
+                        <button
+                          onClick={() => {
+                            const curCms = settings.cmsSources.find(c => c.id === settings.selectedCmsId);
+                            if (curCms) fetchVideosFromCms(curCms.url, currentPage, selectedCategoryId, searchKeyword, true);
+                            showToast('数据重载成功');
+                          }}
+                          className="p-2 bg-zinc-900 border border-zinc-800 rounded-lg hover:bg-zinc-800 text-zinc-300 hover:text-white transition shadow-md flex items-center space-x-1.5 text-xs font-bold cursor-pointer"
+                          title="刷新当前列表"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          <span className="hidden sm:inline">刷新列表</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {loadingVideos ? (
+                      /* Elegant skeletal loader grid */
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4" id="grid-loader">
+                        {[...Array(12)].map((_, index) => (
+                          <div key={index} className="bg-[#141414] rounded-xl border border-zinc-900 overflow-hidden flex flex-col space-y-3 animate-pulse h-72">
+                            <div className="aspect-[3/4] bg-zinc-905 w-full" />
+                            <div className="p-3 space-y-2">
+                              <div className="h-3.5 bg-zinc-800 rounded-sm w-3/4" />
+                              <div className="h-3 bg-zinc-850 rounded-sm w-1/2" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : isCategorizedView ? (
+                      /* Categorized Blocks View */
+                      <div className="space-y-10">
+                        {(() => {
+                          const sections = getCategorizedVideos(videos);
+                          const hasAnyRecords = 
+                            sections.movie.length > 0 || 
+                            sections.serial.length > 0 || 
+                            sections.variety.length > 0 || 
+                            sections.anime.length > 0 || 
+                            sections.other.length > 0;
+
+                          if (!hasAnyRecords) {
+                            return (
+                              <div className="bg-[#0e0e0e] text-center rounded-2xl border border-zinc-900 p-12 flex flex-col items-center justify-center space-y-3">
+                                <div className="p-3 bg-red-950/20 text-red-500 rounded-full border border-red-900/30">
+                                  <AlertTriangle className="h-6 w-6" />
+                                </div>
+                                <div className="space-y-1">
+                                  <h4 className="font-bold text-zinc-150 text-sm">暂无当前视频资源</h4>
+                                  <p className="text-zinc-500 text-xs max-w-sm mx-auto leading-relaxed">
+                                    无法从当前采集源提取分类数据，您可刷新列表，或者在下方切换其他中转/直连采集源重试。
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <>
+                              {/* 1. MOVIES SECTION */}
+                              {sections.movie.length > 0 && (
+                                <div className="space-y-3.5">
+                                  <div className="flex items-center justify-between border-b border-zinc-900/60 pb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-lg">🎬</span>
+                                      <h4 className="text-sm sm:text-base font-extrabold text-white tracking-wide">
+                                        电影大片 <span className="text-zinc-500 font-normal">/ 最新上映</span>
+                                      </h4>
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        setNavTab('movies');
+                                        setSelectedCategoryId('');
+                                        showToast('已切换至电影大片专区');
+                                      }}
+                                      className="text-xs text-red-500 hover:text-red-400 font-bold transition flex items-center space-x-0.5 cursor-pointer hover:underline"
+                                    >
+                                      <span>查看全部</span>
+                                      <ChevronRight className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                                    {sections.movie.slice(0, 12).map((movie) => (
+                                      <VideoCard
+                                        key={movie.id}
+                                        video={movie}
+                                        onClick={() => handleSelectVideo(movie)}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* 2. SERIALS SECTION */}
+                              {sections.serial.length > 0 && (
+                                <div className="space-y-3.5">
+                                  <div className="flex items-center justify-between border-b border-zinc-900/60 pb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-lg">📺</span>
+                                      <h4 className="text-sm sm:text-base font-extrabold text-white tracking-wide">
+                                        连续剧集 <span className="text-zinc-500 font-normal">/ 同步更新</span>
+                                      </h4>
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        setNavTab('tv');
+                                        setSelectedCategoryId('');
+                                        showToast('已切换至连续剧专区');
+                                      }}
+                                      className="text-xs text-red-500 hover:text-red-400 font-bold transition flex items-center space-x-0.5 cursor-pointer hover:underline"
+                                    >
+                                      <span>查看全部</span>
+                                      <ChevronRight className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                                    {sections.serial.slice(0, 12).map((movie) => (
+                                      <VideoCard
+                                        key={movie.id}
+                                        video={movie}
+                                        onClick={() => handleSelectVideo(movie)}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* 3. VARIETY SECTION */}
+                              {sections.variety.length > 0 && (
+                                <div className="space-y-3.5">
+                                  <div className="flex items-center justify-between border-b border-zinc-900/60 pb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-lg">🎡</span>
+                                      <h4 className="text-sm sm:text-base font-extrabold text-white tracking-wide">
+                                        精彩综艺 <span className="text-zinc-500 font-normal">/ 欢乐速递</span>
+                                      </h4>
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        const cat = categories.find(c => c.name.includes('综艺'));
+                                        if (cat) {
+                                          setSelectedCategoryId(cat.id);
+                                        } else {
+                                          setNavTab('tv');
+                                        }
+                                        showToast('已切换至综艺频道');
+                                      }}
+                                      className="text-xs text-red-500 hover:text-red-400 font-bold transition flex items-center space-x-0.5 cursor-pointer hover:underline"
+                                    >
+                                      <span>查看全部</span>
+                                      <ChevronRight className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                                    {sections.variety.slice(0, 12).map((movie) => (
+                                      <VideoCard
+                                        key={movie.id}
+                                        video={movie}
+                                        onClick={() => handleSelectVideo(movie)}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* 4. ANIME SECTION */}
+                              {sections.anime.length > 0 && (
+                                <div className="space-y-3.5">
+                                  <div className="flex items-center justify-between border-b border-zinc-900/60 pb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-lg">🦄</span>
+                                      <h4 className="text-sm sm:text-base font-extrabold text-white tracking-wide">
+                                        动漫世界 <span className="text-zinc-500 font-normal">/ 次元畅游</span>
+                                      </h4>
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        const cat = categories.find(c => c.name.includes('动漫') || c.name.includes('动画'));
+                                        if (cat) {
+                                          setSelectedCategoryId(cat.id);
+                                        } else {
+                                          setNavTab('tv');
+                                        }
+                                        showToast('已切换至动漫频道');
+                                      }}
+                                      className="text-xs text-red-500 hover:text-red-400 font-bold transition flex items-center space-x-0.5 cursor-pointer hover:underline"
+                                    >
+                                      <span>查看全部</span>
+                                      <ChevronRight className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                                    {sections.anime.slice(0, 12).map((movie) => (
+                                      <VideoCard
+                                        key={movie.id}
+                                        video={movie}
+                                        onClick={() => handleSelectVideo(movie)}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* 5. OTHERS SECTION */}
+                              {sections.other.length > 0 && (
+                                <div className="space-y-3.5">
+                                  <div className="flex items-center justify-between border-b border-zinc-900/60 pb-2">
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-lg">📁</span>
+                                      <h4 className="text-sm sm:text-base font-extrabold text-white tracking-wide">
+                                        其它分类资源 <span className="text-zinc-500 font-normal">/ 更多探索</span>
+                                      </h4>
+                                    </div>
+                                  </div>
+                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+                                    {sections.other.slice(0, 12).map((movie) => (
+                                      <VideoCard
+                                        key={movie.id}
+                                        video={movie}
+                                        onClick={() => handleSelectVideo(movie)}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+                    ) : getFilteredVideosToRender().length > 0 ? (
+                      /* Flat View (Search or Filtered) */
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4" id="movie-grid-viewport">
+                        {getFilteredVideosToRender().map((movie) => (
+                          <VideoCard
+                            key={movie.id}
+                            video={movie}
+                            onClick={() => handleSelectVideo(movie)}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      /* Empty State */
+                      <div className="bg-[#0e0e0e] text-center rounded-2xl border border-zinc-900 p-12 flex flex-col items-center justify-center space-y-3" id="movie-grid-empty">
+                        <div className="p-3 bg-red-950/20 text-red-500 rounded-full border border-red-900/30">
+                          <AlertTriangle className="h-6 w-6" />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-zinc-150 text-sm">
+                            {navTab === 'mylist' ? '您的臻选片单目前为空' : '未采集到相匹配的影片对象'}
+                          </h4>
+                          <p className="text-zinc-500 text-xs mt-1.5 max-w-sm mx-auto leading-relaxed">
+                            {navTab === 'mylist' 
+                              ? '浏览各大影片资源时，点击“收藏”按钮，即可在此随时畅享一键专属续播通道。'
+                              : '可能这线路的资源库没有收录相关影片，或者您的自定义采集字段与该站点的API不对应。可以前往采集规则设置 调整。'}
+                          </p>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                ) : getFilteredVideosToRender().length > 0 ? (
-                  /* Video cards layout */
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4" id="movie-grid-viewport">
-                    {getFilteredVideosToRender().map((movie) => (
-                      <VideoCard
-                        key={movie.id}
-                        video={movie}
-                        onClick={() => handleSelectVideo(movie)}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  /* Empty state error */
-                  <div className="bg-[#0e0e0e] text-center rounded-2xl border border-zinc-900 p-12 flex flex-col items-center justify-center space-y-3" id="movie-grid-empty">
-                    <div className="p-3 bg-red-950/20 text-red-500 rounded-full border border-red-900/30">
-                      <AlertTriangle className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <h4 className="font-bold text-zinc-150 text-sm">
-                        {navTab === 'mylist' ? '您的臻选片单目前为空' : '未采集到相匹配的影片对象'}
-                      </h4>
-                      <p className="text-zinc-500 text-xs mt-1.5 max-w-sm mx-auto leading-relaxed">
-                        {navTab === 'mylist' 
-                          ? '浏览各大影片资源时，点击“收藏”按钮，即可在此随时畅享一键专属续播通道。'
-                          : '可能这线路的资源库没有收录相关影片，或者您的自定义采集字段与该站点的API不对应。可以前往采集规则设置 调整。'}
-                      </p>
-                    </div>
-                  </div>
-                )}
+                    )}
 
-                {/* PAGINATION PANEL */}
-                {totalPages > 1 && (
-                  <div className="flex items-center justify-center space-x-3.5 pt-6" id="pagination-controls-row">
-                    <button
-                      id="btn-page-prev"
-                      onClick={() => {
-                        if (currentPage > 1) setCurrentPage(currentPage - 1);
-                      }}
-                      disabled={currentPage === 1}
-                      className={`p-2 rounded-xl border transition flex items-center justify-center ${
-                        currentPage === 1
-                          ? 'bg-zinc-900/40 text-zinc-650 border-zinc-800/40 cursor-not-allowed'
-                          : 'bg-zinc-900 hover:bg-zinc-850 border-zinc-800 text-zinc-100 shadow-md cursor-pointer'
-                      }`}
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </button>
-                    
-                    <span className="text-xs font-bold text-zinc-400 font-mono">
-                      第 {currentPage} 页 / 共 {totalPages} 页
-                    </span>
+                    {/* PAGINATION PANEL */}
+                    {totalPages > 1 && !isCategorizedView && (
+                      <div className="flex items-center justify-center space-x-3.5 pt-6" id="pagination-controls-row">
+                        <button
+                          id="btn-page-prev"
+                          onClick={() => {
+                            if (currentPage > 1) setCurrentPage(currentPage - 1);
+                          }}
+                          disabled={currentPage === 1}
+                          className={`p-2 rounded-xl border transition flex items-center justify-center ${
+                            currentPage === 1
+                              ? 'bg-zinc-900/40 text-zinc-650 border-zinc-800/40 cursor-not-allowed'
+                              : 'bg-zinc-900 hover:bg-zinc-850 border-zinc-800 text-zinc-100 shadow-md cursor-pointer'
+                          }`}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                        </button>
+                        
+                        <span className="text-xs font-bold text-zinc-400 font-mono">
+                          第 {currentPage} 页 / 共 {totalPages} 页
+                        </span>
 
-                    <button
-                      id="btn-page-next"
-                      onClick={() => {
-                        if (currentPage < totalPages) setCurrentPage(currentPage + 1);
-                      }}
-                      disabled={currentPage === totalPages}
-                      className={`p-2 rounded-xl border transition flex items-center justify-center ${
-                        currentPage === totalPages
-                          ? 'bg-zinc-900/40 text-zinc-650 border-zinc-800/40 cursor-not-allowed'
-                          : 'bg-zinc-900 hover:bg-zinc-850 border-zinc-800 text-zinc-100 shadow-md cursor-pointer'
-                      }`}
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
+                        <button
+                          id="btn-page-next"
+                          onClick={() => {
+                            if (currentPage < totalPages) setCurrentPage(currentPage + 1);
+                          }}
+                          disabled={currentPage === totalPages}
+                          className={`p-2 rounded-xl border transition flex items-center justify-center ${
+                            currentPage === totalPages
+                              ? 'bg-zinc-900/40 text-zinc-650 border-zinc-800/40 cursor-not-allowed'
+                              : 'bg-zinc-900 hover:bg-zinc-850 border-zinc-800 text-zinc-100 shadow-md cursor-pointer'
+                          }`}
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-
-              </div>
+                );
+              })())}
             </div>
           )}
 
@@ -3558,19 +4020,6 @@ export default function App() {
 
         </section>
       </main>
-
-      {/* FOOTER METADATA STATUS BAR */}
-      <footer className="h-10 bg-white border-t border-zinc-200 px-4 sm:px-10 flex items-center justify-between text-[11px] text-zinc-400 shrink-0">
-        <div className="flex space-x-4">
-          <span className="hidden sm:inline">系统负载: <span className="text-emerald-600 font-sans font-bold">1.2%</span></span>
-          <span>CMS API Version: <span className="text-zinc-600 font-mono font-bold">v4.2.0</span></span>
-          <span className="hidden sm:inline">采集并发: 12ms</span>
-        </div>
-        <div className="flex items-center">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 mr-1.5 animate-pulse" />
-          <span>采集总线连接正常</span>
-        </div>
-      </footer>
     </div>
   );
 }

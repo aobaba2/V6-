@@ -11,6 +11,8 @@ interface VideoPlayerProps {
   onNavigateEpisode?: (direction: 'prev' | 'next') => void;
   hasPrev?: boolean;
   hasNext?: boolean;
+  initialTime?: number;
+  onTimeUpdate?: (currentTime: number) => void;
 }
 
 export default function VideoPlayer({
@@ -20,21 +22,48 @@ export default function VideoPlayer({
   parser,
   onNavigateEpisode,
   hasPrev = false,
-  hasNext = false
+  hasNext = false,
+  initialTime = 0,
+  onTimeUpdate
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isReady, setIsReady] = useState(false);
   const hlsRef = useRef<Hls | null>(null);
 
+  const [showResumeNotice, setShowResumeNotice] = useState(false);
+  const lastSavedTimeRef = useRef<number>(0);
+  const initialTimeAppliedRef = useRef<string>('');
+  const initialTimeRef = useRef<number>(initialTime);
+
+  // Sync initialTime with initialTimeRef.current
+  useEffect(() => {
+    initialTimeRef.current = initialTime;
+  }, [initialTime]);
+
   // Determine whether to use external parser (Iframe) or internal Hls.js player
   const useParser = parser !== null && parser.id !== 'internal';
   const parserUrl = useParser ? `${parser!.url}${encodeURIComponent(playUrl)}` : undefined;
+
+  const formatProgressTime = (seconds: number): string => {
+    if (isNaN(seconds) || seconds < 0) return '00:00';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    
+    const pad = (num: number) => String(num).padStart(2, '0');
+    
+    if (h > 0) {
+      return `${pad(h)}:${pad(m)}:${pad(s)}`;
+    }
+    return `${pad(m)}:${pad(s)}`;
+  };
 
   useEffect(() => {
     // Reset state when url changes
     setErrorMsg(null);
     setIsReady(false);
+    setShowResumeNotice(false);
 
     if (useParser || !playUrl) return;
 
@@ -52,6 +81,9 @@ export default function VideoPlayer({
       ? `/api/stream-proxy?url=${encodeURIComponent(playUrl)}`
       : playUrl;
 
+    let onLoadedMetadata: (() => void) | null = null;
+    let onError: (() => void) | null = null;
+
     if (Hls.isSupported()) {
       const hls = new Hls({
         maxMaxBufferLength: 30,
@@ -65,6 +97,17 @@ export default function VideoPlayer({
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         setIsReady(true);
+        const currentInitTime = initialTimeRef.current;
+        if (currentInitTime && currentInitTime > 0 && initialTimeAppliedRef.current !== playUrl) {
+          video.currentTime = currentInitTime;
+          initialTimeAppliedRef.current = playUrl;
+          lastSavedTimeRef.current = currentInitTime;
+          setShowResumeNotice(true);
+          const timer = setTimeout(() => {
+            setShowResumeNotice(false);
+          }, 5000);
+          return () => clearTimeout(timer);
+        }
         video.play().catch(() => {
           console.log("Playback autofail, waiting for user interaction");
         });
@@ -91,24 +134,52 @@ export default function VideoPlayer({
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native Apple HLS (Safari/iOS) fallback
       video.src = playableUrl;
-      video.addEventListener('loadedmetadata', () => {
+      onLoadedMetadata = () => {
         setIsReady(true);
+        const currentInitTime = initialTimeRef.current;
+        if (currentInitTime && currentInitTime > 0 && initialTimeAppliedRef.current !== playUrl) {
+          video.currentTime = currentInitTime;
+          initialTimeAppliedRef.current = playUrl;
+          lastSavedTimeRef.current = currentInitTime;
+          setShowResumeNotice(true);
+          setTimeout(() => {
+            setShowResumeNotice(false);
+          }, 5000);
+        }
         video.play().catch(() => {});
-      });
-      video.addEventListener('error', () => {
+      };
+      onError = () => {
         setErrorMsg('iOS Safari 播放失败，请尝试刷新。若链接失效或不支持，请尝试切换外部解析播放。');
-      });
+      };
+
+      video.addEventListener('loadedmetadata', onLoadedMetadata);
+      video.addEventListener('error', onError);
     } else {
       setErrorMsg('您的浏览器不支持 HLS (.m3u8) 视频播放。请尝试在Chrome/Edge中播放，或在解析设置中使用网页嵌套。');
     }
 
     return () => {
+      if (video) {
+        if (onLoadedMetadata) video.removeEventListener('loadedmetadata', onLoadedMetadata);
+        if (onError) video.removeEventListener('error', onError);
+      }
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
     };
   }, [playUrl, useParser]);
+
+  const handleTimeUpdate = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    const video = e.currentTarget;
+    const currentTime = video.currentTime;
+    
+    // Throttle parent callback to avoid lag
+    if (onTimeUpdate && Math.abs(currentTime - lastSavedTimeRef.current) > 3) {
+      lastSavedTimeRef.current = currentTime;
+      onTimeUpdate(currentTime);
+    }
+  };
 
   return (
     <div className="w-full bg-slate-950 rounded-xl overflow-hidden shadow-2xl transition-all duration-300 relative border border-slate-800" id="video-cinema-viewport">
@@ -153,11 +224,34 @@ export default function VideoPlayer({
               controls
               playsInline
               preload="auto"
+              onTimeUpdate={handleTimeUpdate}
             />
             {!isReady && !errorMsg && (
               <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xs flex flex-col items-center justify-center space-y-3 pointer-events-none transition-opacity duration-300">
                 <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-500 border-t-transparent" />
                 <span className="text-slate-300 text-xs tracking-wider">正在加载 HLS 流，请耐心等待...</span>
+              </div>
+            )}
+
+            {/* Resume progress notification notice */}
+            {showResumeNotice && (
+              <div className="absolute bottom-16 left-4 bg-slate-900/95 text-slate-100 text-xs px-3.5 py-2.5 rounded-lg border border-slate-700 shadow-2xl flex items-center space-x-2.5 z-40 transition-all duration-300">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                <span>已为您自动恢复上次播放进度至 <strong className="text-emerald-400">{formatProgressTime(initialTime)}</strong></span>
+                <button 
+                  onClick={() => {
+                    const video = videoRef.current;
+                    if (video) {
+                      video.currentTime = 0;
+                      if (onTimeUpdate) onTimeUpdate(0);
+                    }
+                    setShowResumeNotice(false);
+                  }}
+                  className="text-blue-400 hover:text-blue-300 font-bold ml-2 underline hover:no-underline flex items-center space-x-1"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  <span>重新开始</span>
+                </button>
               </div>
             )}
           </div>

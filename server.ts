@@ -135,30 +135,6 @@ function getSettings(): AppSettings {
           }
           return source;
         });
-
-        // 3. Ensure 'ffzy' exists in sources list
-        const hasFfzy = settings.cmsSources.some(s => s.id === 'ffzy' || s.url.includes('ffzyapi.com'));
-        if (!hasFfzy) {
-          settings.cmsSources.unshift({
-            id: 'ffzy',
-            name: '飞速高清 (飞速极速)',
-            url: 'https://api.ffzyapi.com/api.php/provide/vod/at/json',
-            status: 'active'
-          });
-          modified = true;
-        }
-
-        // 4. Ensure 'hhzy' exists
-        const hasHhzy = settings.cmsSources.some(s => s.id === 'hhzy' || s.url.includes('hhzyapi.com'));
-        if (!hasHhzy) {
-          settings.cmsSources.push({
-            id: 'hhzy',
-            name: '豪华资源 (豪华极速)',
-            url: 'https://hhzyapi.com/api.php/provide/vod/at/json',
-            status: 'active'
-          });
-          modified = true;
-        }
       }
 
       // 5. Ensure iptvSources exists and has fallback values if empty
