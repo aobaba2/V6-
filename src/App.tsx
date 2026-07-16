@@ -638,7 +638,9 @@ export default function App() {
     if (item.cmsId && item.cmsId !== settings.selectedCmsId) {
       const parentCms = settings.cmsSources.find(c => c.id === item.cmsId);
       if (parentCms) {
-        setSettings(prev => ({ ...prev, selectedCmsId: item.cmsId }));
+        const nextSettings = { ...settings, selectedCmsId: item.cmsId };
+        setSettings(nextSettings);
+        localStorage.setItem('appSettings', JSON.stringify(nextSettings));
         showToast(`已切换至该视频所属数据站: ${parentCms.name}`, 'info');
       }
     }
@@ -695,17 +697,30 @@ export default function App() {
 
     setParsedServers(parsed);
 
-    let targetServerIdx = item.lastPlayedServerIndex;
-    let targetEpisodeIdx = item.lastPlayedEpisodeIndex;
+    // Intelligent line/server and episode matching using name mapping first, then index mapping
+    let targetServerIdx = 0;
+    let targetEpisodeIdx = 0;
 
-    if (targetServerIdx >= parsed.length) {
-      targetServerIdx = 0;
+    let foundServerIdx = parsed.findIndex(
+      s => s.name === item.lastPlayedServerName
+    );
+    if (foundServerIdx === -1 && item.lastPlayedServerIndex < parsed.length) {
+      foundServerIdx = item.lastPlayedServerIndex;
     }
-    if (parsed[targetServerIdx] && targetEpisodeIdx >= parsed[targetServerIdx].episodes.length) {
-      targetEpisodeIdx = 0;
+    
+    if (foundServerIdx !== -1) {
+      targetServerIdx = foundServerIdx;
+      const eps = parsed[targetServerIdx].episodes;
+      let foundEpIdx = eps.findIndex(ep => ep.name === item.lastPlayedEpisodeName);
+      if (foundEpIdx === -1 && item.lastPlayedEpisodeIndex < eps.length) {
+        foundEpIdx = item.lastPlayedEpisodeIndex;
+      }
+      if (foundEpIdx !== -1) {
+        targetEpisodeIdx = foundEpIdx;
+      }
     }
 
-    if (parsed.length > 0 && parsed[targetServerIdx].episodes.length > 0) {
+    if (parsed.length > 0 && parsed[targetServerIdx]?.episodes?.length > 0) {
       setCurrentServerIndex(targetServerIdx);
       setCurrentEpisodeIndex(targetEpisodeIdx);
       setCurrentPlayUrl(parsed[targetServerIdx].episodes[targetEpisodeIdx].url);
@@ -720,6 +735,14 @@ export default function App() {
       );
 
       showToast(`已为您自动恢复上次播放: ${parsed[targetServerIdx].name} - ${parsed[targetServerIdx].episodes[targetEpisodeIdx].name}`);
+      
+      // Fine-grained scrolling to the current active episode inside listing
+      setTimeout(() => {
+        const epBtn = document.getElementById(`ep-btn-${targetServerIdx}-${targetEpisodeIdx}`);
+        if (epBtn) {
+          epBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 350);
     } else {
       setCurrentPlayUrl('');
       showToast('无法定位该视频的播放地址', 'error');
@@ -1608,18 +1631,31 @@ export default function App() {
     let targetEpisodeIdx = 0;
     
     if (existingHistory) {
-      if (
-        existingHistory.lastPlayedServerIndex < parsed.length &&
-        existingHistory.lastPlayedEpisodeIndex < parsed[existingHistory.lastPlayedServerIndex].episodes.length
-      ) {
-        targetServerIdx = existingHistory.lastPlayedServerIndex;
-        targetEpisodeIdx = existingHistory.lastPlayedEpisodeIndex;
-        showToast(`已自动为您恢复续看：${existingHistory.lastPlayedServerName} - ${existingHistory.lastPlayedEpisodeName}`, 'success');
+      // Intelligent matching of the line (server) and episode using name first, then index
+      let foundServerIdx = parsed.findIndex(
+        s => s.name === existingHistory.lastPlayedServerName
+      );
+      if (foundServerIdx === -1 && existingHistory.lastPlayedServerIndex < parsed.length) {
+        foundServerIdx = existingHistory.lastPlayedServerIndex;
       }
+      
+      if (foundServerIdx !== -1) {
+        targetServerIdx = foundServerIdx;
+        const eps = parsed[targetServerIdx].episodes;
+        let foundEpIdx = eps.findIndex(ep => ep.name === existingHistory.lastPlayedEpisodeName);
+        if (foundEpIdx === -1 && existingHistory.lastPlayedEpisodeIndex < eps.length) {
+          foundEpIdx = existingHistory.lastPlayedEpisodeIndex;
+        }
+        if (foundEpIdx !== -1) {
+          targetEpisodeIdx = foundEpIdx;
+        }
+      }
+      
+      showToast(`已自动为您恢复续看：${parsed[targetServerIdx]?.name || existingHistory.lastPlayedServerName} - ${parsed[targetServerIdx]?.episodes[targetEpisodeIdx]?.name || existingHistory.lastPlayedEpisodeName}`, 'success');
     }
 
     // Choose target server and episode to play
-    if (parsed.length > 0 && parsed[targetServerIdx].episodes.length > 0) {
+    if (parsed.length > 0 && parsed[targetServerIdx]?.episodes?.length > 0) {
       setCurrentServerIndex(targetServerIdx);
       setCurrentEpisodeIndex(targetEpisodeIdx);
       setCurrentPlayUrl(parsed[targetServerIdx].episodes[targetEpisodeIdx].url);
@@ -1634,6 +1670,14 @@ export default function App() {
           parsed[targetServerIdx].episodes[targetEpisodeIdx].url
         );
       }
+
+      // Smooth scroll the selected episode into view in the lists
+      setTimeout(() => {
+        const epBtn = document.getElementById(`ep-btn-${targetServerIdx}-${targetEpisodeIdx}`);
+        if (epBtn) {
+          epBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 350);
     } else {
       setCurrentPlayUrl('');
       showToast('未能从所选播放字段解析到合规链接。请检查您在自定义规则中设置的符号。', 'info');

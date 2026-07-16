@@ -94,7 +94,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 const DEFAULT_SETTINGS_FILE = path.join(process.cwd(), 'data', 'settings.json');
 const DATA_DIR = process.env.VERCEL ? '/tmp' : path.join(process.cwd(), 'data');
 const SETTINGS_FILE = process.env.VERCEL ? '/tmp/settings.json' : path.join(DATA_DIR, 'settings_user.json');
